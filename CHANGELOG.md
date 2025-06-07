@@ -1,0 +1,1 @@
+1.0.0 Initial version, 1.0.3 Stable version to display image,1.0.4 Expanded version, 1.0.6 Including Sync, 1.0.7 Including IPTC keywords

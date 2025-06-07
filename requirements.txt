@@ -1,0 +1,6 @@
+fastapi[standard]
+pillow
+pydantic
+wakeonlan
+samsungtvws @ git+https://github.com/NickWaterton/samsung-tv-ws-api
+IPTCInfo3 @git+https://github.com/james-see/iptcinfo3/
