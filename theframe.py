@@ -1,3 +1,11 @@
+# TheFrame Controller for Samsung The Frame TV
+#
+# This code provides an API to manage and display images on a Samsung The Frame TV.
+# It includes functionality to upload images, display slideshows, and manage TV settings.
+# It uses FastAPI for the web interface and samsungtvws for communication with the TV.
+# It also includes PIL for image processing if available.
+# This code is designed to run in a Home Assistant environment, where it can be used as an add-on.
+
 from fastapi import FastAPI
 from pydantic import BaseModel
 import asyncio

@@ -11,3 +11,5 @@ curl -X POST http://localhost:5000/show_slideshow_index -H "Content-Type: applic
 curl -X POST http://localhost:5000/sync_files -H "Content-Type: application/json" -d '{}'
 
 curl -X POST http://localhost:5000/show_slideshow_next -H "Content-Type: application/json" -d '{}'
+
+curl -X POST http://localhost:5000/get_artmode_settings -H "Content-Type: application/json" -d '{}'
