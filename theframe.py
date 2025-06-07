@@ -651,7 +651,9 @@ class TheFrameController:
         @self.app.get("/get_artmode_settings")
         async def get_artmode_settings():
             try:
-                settings = await self.tv.get_artmode_settings()
+                settings = await self.tv.get_artmode_settings('')
+                if not settings:
+                    return {"status": "error", "error": "Failed to retrieve art mode settings"}
                 return {"status": "success", "settings": settings}
             except Exception as e:
                 return {"status": "error", "error": str(e)}
