@@ -640,6 +640,14 @@ class TheFrameController:
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
+        @self.app.get("/get_artmode_settings")
+        async def get_artmode_settings():
+            try:
+                settings = await self.tv.get_artmode_settings()
+                return {"status": "success", "settings": settings}
+            except Exception as e:
+                return {"status": "error", "error": str(e)}
+
 # Instantiate the controller
 controller = TheFrameController()
 app = controller.app
