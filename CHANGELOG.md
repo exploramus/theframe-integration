@@ -5,3 +5,4 @@
 1.0.7 Including IPTC keywords
 1.0.8 Refreshing keywords
 1.0.9 Refreshing files
+1.0.10 Recompiled to update includes

@@ -14,7 +14,7 @@ options:
   tv_ip: "192.168.178.94"
   tv_mac: "BC:45:5B:3F:55:C5"
   json_path: "/media/TheFrame/uploaded_files.json"
-  image_path: "/share/TheFrame/"
+  image_path: "/media/TheFrameImages/"
   matte: "none"
 schema:
   token_file: str

@@ -194,7 +194,7 @@ class TheFrameController:
             try:
                 send_magic_packet(self.tv_mac)
                 # Wait a bit for the TV to wake up
-                time.sleep(2)
+                time.sleep(5)
                 self.log.info(f"Sent WOL packet to {self.tv_mac}")
             except Exception as e:
                 self.log.error(f"Failed to send WOL packet: {e}")
@@ -211,8 +211,9 @@ class TheFrameController:
         self.start = time.time()
         self.current_content_id = None
         self.pil = PIL_methods(self)
+        self.port=8002
         try:
-            self.tv = SamsungTVAsyncArt(host=self.tv_ip, port=8002, token_file=self.token_file)
+            self.tv = SamsungTVAsyncArt(host=self.tv_ip, port=self.port, token_file=self.token_file)
         except Exception:
             logging.error("Failed to connect to TV. Please check the IP address and token file.")
             sys.exit(1)
@@ -307,7 +308,7 @@ class TheFrameController:
             await self.tv.select_image(content_id)
             return content_id
         except Exception:
-            return None
+            return RuntimeError(f"Failed to select image for content_id {content_id}: {e}")
         
     async def get_tv_content(self, category='MY-C0002'):
         '''
@@ -516,13 +517,17 @@ class TheFrameController:
 
 
     def setup_routes(self):
+        
         @self.app.post("/sync_files")
         async def sync_files():
-            try:
-                await self.scan_and_sync_dir()
-                return {"status": "success", "files": self.tv_files}
-            except Exception as e:
-                return {"status": "error", "error": str(e)}
+            if not hasattr(self, '_sync_lock'):
+                self._sync_lock = asyncio.Lock()     
+            async with self._sync_lock:
+                try:
+                    await self.scan_and_sync_dir()
+                    return {"status": "success", "files": self.tv_files}
+                except Exception as e:
+                    return {"status": "error", "error": str(e)}
 
         @self.app.post("/refresh_files")
         async def refresh_files():
