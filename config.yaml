@@ -1,5 +1,5 @@
 name: "The Frame Controller"
-version: "1.0.9.011"
+version: "1.0.12.001"
 slug: theframe_controller
 description: >-
   "Control Samsung The Frame in Art Mode with this add-on."
@@ -16,6 +16,8 @@ options:
   json_path: "/media/TheFrame/uploaded_files.json"
   image_path: "/media/TheFrameImages/"
   matte: "none"
+  tv_connect_timeout: 15
+  tv_connect_interval: 2
 schema:
   token_file: str
   tv_ip: str
@@ -23,6 +25,8 @@ schema:
   json_path: str
   image_path: str
   matte: str
+  tv_connect_timeout: int
+  tv_connect_interval: int
 map:
   - type: share
     read_only: False

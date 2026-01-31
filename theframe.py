@@ -190,24 +190,7 @@ class TheFrameController:
             self.log.error("TV_IP is not set in /data/options.json.")
             sys.exit(1)
         self.tv_mac = config.get("tv_mac")
-        if self.tv_mac:
-            try:
-                send_magic_packet(self.tv_mac)
-                # Wait a bit for the TV to wake up
-                time.sleep(5)
-                send_magic_packet(self.tv_mac)
-                # Wait a bit for the TV to wake up
-                time.sleep(5)
-                send_magic_packet(self.tv_mac)
-                # Wait a bit for the TV to wake up
-                time.sleep(5)
-                send_magic_packet(self.tv_mac)
-                # Wait a bit for the TV to wake up
-                time.sleep(5)
-                self.log.info(f"Sent WOL packet to {self.tv_mac}")
-            except Exception as e:
-                self.log.error(f"Failed to send WOL packet: {e}")
-        else:
+        if not self.tv_mac:
             self.log.warning("No TV MAC address provided, WOL will not be sent.")
         self.token_file = config.get("token_file")
         self.log.info(f"Using token file: {self.token_file}")
@@ -217,15 +200,19 @@ class TheFrameController:
         self.log.info(f"Using image folder: {self.folder}")
         self.matte = config.get("matte", "none")
         self.log.info(f"Using matte: {self.matte}")
+        self.tv_connect_timeout = int(config.get("tv_connect_timeout", 15))
+        self.tv_connect_interval = int(config.get("tv_connect_interval", 2))
+        self.log.info(f"Using TV connect timeout: {self.tv_connect_timeout}s")
+        self.log.info(f"Using TV connect interval: {self.tv_connect_interval}s")
         self.start = time.time()
         self.current_content_id = None
         self.pil = PIL_methods(self)
         self.port=8002
-        try:
-            self.tv = SamsungTVAsyncArt(host=self.tv_ip, port=self.port, token_file=self.token_file)
-        except Exception:
-            logging.error("Failed to connect to TV. Please check the IP address and token file.")
-            sys.exit(1)
+        self.tv = None
+        self._tv_lock = asyncio.Lock()
+        self._last_wol_sent = 0
+        self._wol_min_interval = 10
+        self.tv_connect_last_error = None
         self.setup_routes()
 
     class ShowImageRequest(BaseModel):
@@ -241,11 +228,48 @@ class TheFrameController:
     class SlideshowIndexRequest(BaseModel):
         slideshow_index: int
 
+    async def _tv_handshake(self):
+        if not self.tv:
+            return False
+        try:
+            await asyncio.wait_for(self.tv.get_api_version(), timeout=3)
+            return True
+        except Exception as e:
+            self.tv_connect_last_error = str(e)
+            return False
+
+    async def ensure_tv(self, wake_on_lan=True):
+        if self.tv and await self._tv_handshake():
+            return True
+        async with self._tv_lock:
+            if not self.tv:
+                try:
+                    self.tv = SamsungTVAsyncArt(host=self.tv_ip, port=self.port, token_file=self.token_file)
+                except Exception as e:
+                    self.tv_connect_last_error = str(e)
+                    self.tv = None
+                    return False
+            if wake_on_lan and self.tv_mac and time.time() - self._last_wol_sent >= self._wol_min_interval:
+                try:
+                    send_magic_packet(self.tv_mac)
+                    self._last_wol_sent = time.time()
+                    self.log.info(f"Sent WOL packet to {self.tv_mac}")
+                except Exception as e:
+                    self.log.warning(f"Failed to send WOL packet: {e}")
+            start = time.time()
+            while time.time() - start < self.tv_connect_timeout:
+                if await self._tv_handshake():
+                    return True
+                await asyncio.sleep(self.tv_connect_interval)
+        return False
+
     async def get_api_version(self):
             '''
             checks api version to see if it's old (<2021) or new type
             sets api_version to 0 for old, and 1 for new
             '''
+            if not await self.ensure_tv(wake_on_lan=False):
+                raise RuntimeError("TV is not reachable")
             api_version = await self.tv.get_api_version()
             self.log.info('API version: {}'.format(api_version))
             self.api_version = 0 if int(api_version.replace('.','')) < 4000 else 1
@@ -254,6 +278,9 @@ class TheFrameController:
         '''
         gets content_id list of category - either My Photos (MY-C0002) or Favourites (MY-C0004) from tv
         '''
+        if not await self.ensure_tv():
+            self.log.warning("TV is not reachable")
+            return None
         try:
             result = [v['content_id'] for v in await self.tv.available(category, timeout=10)]
         except AssertionError:
@@ -316,13 +343,17 @@ class TheFrameController:
         try:
             await self.tv.select_image(content_id)
             return content_id
-        except Exception:
-            return RuntimeError(f"Failed to select image for content_id {content_id}: {e}")
+        except Exception as e:
+            self.log.warning(f"Failed to select image for content_id {content_id}: {e}")
+            return None
         
     async def get_tv_content(self, category='MY-C0002'):
         '''
         gets content_id list of category - either My Photos (MY-C0002) or Favourites (MY-C0004) from tv
         '''
+        if not await self.ensure_tv():
+            self.log.warning("TV is not reachable")
+            return None
         try:
             result = [v['content_id'] for v in await self.tv.available(category, timeout=10)]
         except AssertionError:
@@ -340,6 +371,8 @@ class TheFrameController:
         '''
         reads currently displayed art content_id from tv
         '''
+        if not await self.ensure_tv():
+            return None
         try:
             content_id = (await self.tv.get_current()).get('content_id')
         except Exception:
@@ -350,6 +383,8 @@ class TheFrameController:
         '''
         if art has been deleted on tv, resyncronises uploaded_files with tv
         '''
+        if not await self.ensure_tv():
+            return
         my_photos = await self.get_tv_content('MY-C0002')
         if my_photos is not None:
             self.tv_files = {k:v for k,v in self.tv_files.items() if v['content_id'] in my_photos}
@@ -436,6 +471,8 @@ class TheFrameController:
         '''
         upload files in list to tv
         '''
+        if not await self.ensure_tv():
+            return
         for filename in filenames:
             path = os.path.join(self.folder, filename)
             file_data, file_type, exif_tags = self.read_file(path)
@@ -452,6 +489,8 @@ class TheFrameController:
         '''
         remove files from tv if tv is in art mode
         '''
+        if not await self.ensure_tv():
+            return
         if self.tv.art_mode:
             self.log.info('removing files from tv : {}'.format(content_ids))
             await self.tv.delete_list(content_ids)
@@ -512,6 +551,9 @@ class TheFrameController:
         scan folder for new, deleted or updated files, but only when tv is in art mode
         '''
         try:
+            if not await self.ensure_tv():
+                self.log.info('tv not reachable; skipping sync')
+                return
             if await self.tv.in_artmode():
                 self.log.info('checking directory: {}'.format(self.folder))
                 files = self.get_folder_files()
@@ -548,6 +590,8 @@ class TheFrameController:
 
         @self.app.post("/show_image")
         async def show_image(req: self.ShowImageRequest):
+            if not await self.ensure_tv():
+                return {"status": "error", "error": "TV is not reachable"}
             if not await self.tv.in_artmode():
                 return {"status": "error", "error": "TV is not in art mode"}
             if not await self.select_image(req.content_id):
@@ -556,6 +600,8 @@ class TheFrameController:
 
         @self.app.post("/show_file")
         async def show_file(req: self.ShowFileRequest):
+            if not await self.ensure_tv():
+                return {"status": "error", "error": "TV is not reachable"}
             if not await self.tv.in_artmode():
                 return {"status": "error", "error": "TV is not in art mode"}
             content_id = await self.get_content_id(req.file_name)
@@ -589,6 +635,8 @@ class TheFrameController:
 
         @self.app.post("/show_slideshow_next")
         async def show_slideshow_next():
+            if not await self.ensure_tv():
+                return {"status": "error", "error": "TV is not reachable"}
             if not await self.tv.in_artmode():
                 return {"status": "error", "error": "TV is not in art mode"}
             if not self.slideshow_files:
@@ -607,6 +655,8 @@ class TheFrameController:
 
         @self.app.post("/show_slideshow_previous")
         async def show_slideshow_previous():
+            if not await self.ensure_tv():
+                return {"status": "error", "error": "TV is not reachable"}
             if not await self.tv.in_artmode():
                 return {"status": "error", "error": "TV is not in art mode"}
             if not self.slideshow_files:
@@ -625,6 +675,8 @@ class TheFrameController:
         
         @self.app.post("/show_slideshow_index")
         async def show_slideshow_index(req: self.SlideshowIndexRequest):
+            if not await self.ensure_tv():
+                return {"status": "error", "error": "TV is not reachable"}
             if not await self.tv.in_artmode():
                 return {"status": "error", "error": "TV is not in art mode"}
             if not self.slideshow_files:
@@ -665,12 +717,22 @@ class TheFrameController:
         @self.app.get("/get_artmode_settings")
         async def get_artmode_settings():
             try:
+                if not await self.ensure_tv():
+                    return {"status": "error", "error": "TV is not reachable"}
                 settings = await self.tv.get_artmode_settings('')
                 if not settings:
                     return {"status": "error", "error": "Failed to retrieve art mode settings"}
                 return {"status": "success", "settings": settings}
             except Exception as e:
                 return {"status": "error", "error": str(e)}
+
+        @self.app.post("/connect")
+        async def connect():
+            ok = await self.ensure_tv()
+            if not ok:
+                detail = self.tv_connect_last_error or "TV is not reachable"
+                return {"status": "error", "error": detail}
+            return {"status": "success", "message": "Connected to TV"}
 
 # Instantiate the controller
 controller = TheFrameController()
