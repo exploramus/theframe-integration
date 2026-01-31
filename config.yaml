@@ -1,5 +1,5 @@
 name: "The Frame Controller"
-version: "1.0.9.010"
+version: "1.0.9.011^"
 slug: theframe_controller
 description: >-
   "Control Samsung The Frame in Art Mode with this add-on."

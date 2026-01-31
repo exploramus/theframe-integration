@@ -195,6 +195,15 @@ class TheFrameController:
                 send_magic_packet(self.tv_mac)
                 # Wait a bit for the TV to wake up
                 time.sleep(5)
+                send_magic_packet(self.tv_mac)
+                # Wait a bit for the TV to wake up
+                time.sleep(5)
+                send_magic_packet(self.tv_mac)
+                # Wait a bit for the TV to wake up
+                time.sleep(5)
+                send_magic_packet(self.tv_mac)
+                # Wait a bit for the TV to wake up
+                time.sleep(5)
                 self.log.info(f"Sent WOL packet to {self.tv_mac}")
             except Exception as e:
                 self.log.error(f"Failed to send WOL packet: {e}")
