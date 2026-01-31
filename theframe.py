@@ -340,6 +340,12 @@ class TheFrameController:
             raise RuntimeError(f"Failed to get content_id for {filename}: {e}")
 
     async def select_image(self, content_id):
+        '''
+        selects image on tv with given content_id
+        '''
+        if not await self.ensure_tv():
+            self.log.warning("TV is not reachable")
+            return None
         try:
             await self.tv.select_image(content_id)
             return content_id
