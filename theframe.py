@@ -19,7 +19,7 @@ import json
 import time
 import datetime
 from wakeonlan import send_magic_packet
-from iptcinfo3 import IPTCInfo
+from IPTCInfo3 import IPTCInfo
 HAVE_PIL = False
 try:
     from PIL import Image, ImageFilter, ImageChops
