@@ -393,6 +393,7 @@ class TheFrameController:
             if file_type:
                 if file_type == 'jpeg' or file_type == 'jpg':
                     metadata = IPTCInfo(filename)
+                    self.log.info('Metadata: {}'.format(metadata))
                     if metadata:
                         keywords = metadata['keywords']
                         # Convert binary keywords to unicode strings if needed
