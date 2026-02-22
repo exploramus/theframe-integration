@@ -18,6 +18,8 @@ import random
 import json
 import time
 import datetime
+import re
+import xml.etree.ElementTree as ET
 from wakeonlan import send_magic_packet
 from iptcinfo3 import IPTCInfo
 HAVE_PIL = False
@@ -385,20 +387,26 @@ class TheFrameController:
             
     def read_file(self, filename):
         '''
-        read image file, return file binary data, file type, and exif data (if available)
+        read image file, return file binary data, file type, and keywords (if available)
         '''
         try:
             file_type = self.get_file_type(filename)
             keywords = []
             if file_type:
                 if file_type == 'jpeg' or file_type == 'jpg':
-                    metadata = IPTCInfo(filename)
+                    metadata = None
+                    # Older macOS exports wrote keywords to IPTC 'subject'
+                    try:
+                        metadata = IPTCInfo(filename)
+                    except Exception as e:
+                        self.log.info('No IPTC metadata in {}: {}'.format(filename, e))
                     self.log.info('Metadata: {}'.format(metadata))
                     if metadata:
-                        keywords = metadata['keywords']
-                        # Convert binary keywords to unicode strings if needed
-                        if keywords:
-                            keywords = [k.decode('utf-8', errors='replace') if isinstance(k, bytes) else str(k) for k in keywords]
+                        keywords = self.normalize_keywords(metadata['keywords'])
+                    if not keywords:
+                        # Newer macOS exports keep keywords in XMP dc:subject
+                        keywords = self.extract_xmp_subject_keywords(filename)
+                        keywords = self.normalize_keywords(keywords)
                     self.log.info('Keywords: {}'.format(keywords))
                 with open(filename, 'rb') as f:
                     file_data = f.read()
@@ -406,6 +414,38 @@ class TheFrameController:
         except Exception as e:
             self.log.error('Error reading file: {}, {}'.format(filename, e))
         return None, None, None
+
+    def normalize_keywords(self, keywords):
+        if not keywords:
+            return []
+        normalized = [k.decode('utf-8', errors='replace') if isinstance(k, bytes) else str(k) for k in keywords]
+        return [k for k in normalized if k]
+
+    def extract_xmp_subject_keywords(self, filename):
+        keywords = []
+        try:
+            with open(filename, 'rb') as f:
+                file_data = f.read()
+        except Exception as e:
+            self.log.info('Unable to read {} for XMP parsing: {}'.format(filename, e))
+            return keywords
+        xmp_blocks = re.findall(rb'<x:xmpmeta[\s\S]*?</x:xmpmeta>', file_data, flags=re.IGNORECASE)
+        if not xmp_blocks:
+            return keywords
+        seen = set()
+        for xmp_block in xmp_blocks:
+            try:
+                root = ET.fromstring(xmp_block.decode('utf-8', errors='replace'))
+            except ET.ParseError:
+                continue
+            for subject in root.findall('.//{http://purl.org/dc/elements/1.1/}subject'):
+                for item in subject.findall('.//{http://www.w3.org/1999/02/22-rdf-syntax-ns#}li'):
+                    if item.text:
+                        kw = item.text.strip()
+                        if kw and kw not in seen:
+                            seen.add(kw)
+                            keywords.append(kw)
+        return keywords
         
     def get_file_type(self, filename, image_data=None):
         '''
