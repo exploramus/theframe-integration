@@ -9,3 +9,4 @@
 1.0.12 Improved response to TV turned off
 1.0.13 XMP keywords readout
 1.0.14 Asynchronous queued sync in case TV is off or in art modes
+1.0.15 Initialize PIL methods during lifespan and improve error handling in image selection
