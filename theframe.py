@@ -7,6 +7,7 @@
 # This code is designed to run in a Home Assistant environment, where it can be used as an add-on.
 
 from fastapi import FastAPI
+from contextlib import asynccontextmanager
 from pydantic import BaseModel
 import asyncio
 import os
@@ -174,12 +175,19 @@ class TheFrameController:
     allowed_ext = ['jpg', 'jpeg', 'png']
 
     def __init__(self):
-        self.app = FastAPI()
+        @asynccontextmanager
+        async def lifespan(_: FastAPI):
+            asyncio.create_task(self._sync_watcher())
+            yield
+
+        self.app = FastAPI(lifespan=lifespan)
         logging.basicConfig(level=logging.INFO)
         self.log = logging.getLogger('Main.'+__class__.__name__)
         self.tv_files = {}
         self.slideshow_files = {}
         self.slideshow_index = 0
+        self._sync_pending = False
+        self._sync_lock = asyncio.Lock()
         # Load configuration from /data/options.json
         try:
             with open("/data/options.json", "r") as config_file:
@@ -548,33 +556,66 @@ class TheFrameController:
         #wait for files to arrive
         await asyncio.sleep(min(10, 5 * len(files)))
         
+    async def _do_sync(self):
+        files = self.get_folder_files()
+        await self.sync_file_list()
+        await self.remove_files(files)
+        await self.add_files(files)
+        await self.update_files(files)
+
     async def scan_and_sync_dir(self):
         '''
-        scan folder for new, deleted or updated files, but only when tv is in art mode
+        scan folder for new, deleted or updated files, but only when tv is in art mode.
+        sets _sync_pending if TV is not ready so the sync runs automatically when it is.
         '''
         try:
             if await self.tv.in_artmode():
                 self.log.info('checking directory: {}'.format(self.folder))
-                files = self.get_folder_files()
-                await self.sync_file_list()
-                await self.remove_files(files)
-                await self.add_files(files)
-                await self.update_files(files)
+                await self._do_sync()
+                self._sync_pending = False
             else:
-                self.log.info('artmode or tv is off')
+                self.log.info('artmode or tv is off, queuing sync')
+                self._sync_pending = True
         except Exception as e:
-            self.log.warning("error in check_dir: {}".format(e))
+            self.log.warning("error in scan_and_sync_dir: {}".format(e))
+
+    async def _run_pending_sync(self):
+        '''
+        run a deferred sync if one is pending; no-op if already running or cleared.
+        uses double-checked locking to prevent redundant syncs.
+        '''
+        if not self._sync_pending:
+            return
+        async with self._sync_lock:
+            if not self._sync_pending:
+                return
+            try:
+                if await self.tv.in_artmode():
+                    self.log.info('running deferred sync')
+                    await self._do_sync()
+                    self._sync_pending = False
+            except Exception as e:
+                self.log.warning("deferred sync failed: {}".format(e))
+
+    async def _sync_watcher(self):
+        '''
+        background task: retries a pending sync every 60 s until the TV is ready.
+        '''
+        while True:
+            await asyncio.sleep(60)
+            if self._sync_pending:
+                await self._run_pending_sync()
 
 
     def setup_routes(self):
-        
+
         @self.app.post("/sync_files")
         async def sync_files():
-            if not hasattr(self, '_sync_lock'):
-                self._sync_lock = asyncio.Lock()     
             async with self._sync_lock:
                 try:
                     await self.scan_and_sync_dir()
+                    if self._sync_pending:
+                        return {"status": "queued", "message": "TV not in art mode, sync queued"}
                     return {"status": "success", "files": self.tv_files}
                 except Exception as e:
                     return {"status": "error", "error": str(e)}
@@ -591,6 +632,8 @@ class TheFrameController:
         async def show_image(req: self.ShowImageRequest):
             if not await self.tv.in_artmode():
                 return {"status": "error", "error": "TV is not in art mode"}
+            if self._sync_pending:
+                asyncio.create_task(self._run_pending_sync())
             if not await self.select_image(req.content_id):
                 raise RuntimeError(f"Failed to display content_id {req.content_id}")
             return {"status": "success", "shown": req.content_id}
@@ -599,6 +642,8 @@ class TheFrameController:
         async def show_file(req: self.ShowFileRequest):
             if not await self.tv.in_artmode():
                 return {"status": "error", "error": "TV is not in art mode"}
+            if self._sync_pending:
+                asyncio.create_task(self._run_pending_sync())
             content_id = await self.get_content_id(req.file_name)
             if not content_id:
                 return {"status": "error", "error": "Content ID not found"}
@@ -632,6 +677,8 @@ class TheFrameController:
         async def show_slideshow_next():
             if not await self.tv.in_artmode():
                 return {"status": "error", "error": "TV is not in art mode"}
+            if self._sync_pending:
+                asyncio.create_task(self._run_pending_sync())
             if not self.slideshow_files:
                 return {"status": "error", "error": "No slideshow files to show"}
             content_id = list(self.slideshow_files.values())[self.slideshow_index].get("content_id")
@@ -650,6 +697,8 @@ class TheFrameController:
         async def show_slideshow_previous():
             if not await self.tv.in_artmode():
                 return {"status": "error", "error": "TV is not in art mode"}
+            if self._sync_pending:
+                asyncio.create_task(self._run_pending_sync())
             if not self.slideshow_files:
                 return {"status": "error", "error": "No slideshow files to show"}
             self.slideshow_index = (self.slideshow_index - 1) % len(self.slideshow_files)
@@ -668,6 +717,8 @@ class TheFrameController:
         async def show_slideshow_index(req: self.SlideshowIndexRequest):
             if not await self.tv.in_artmode():
                 return {"status": "error", "error": "TV is not in art mode"}
+            if self._sync_pending:
+                asyncio.create_task(self._run_pending_sync())
             if not self.slideshow_files:
                 return {"status": "error", "error": "No slideshow files to show"}
             if not isinstance(req.slideshow_index, int):
