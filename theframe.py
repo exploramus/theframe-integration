@@ -177,6 +177,7 @@ class TheFrameController:
     def __init__(self):
         @asynccontextmanager
         async def lifespan(_: FastAPI):
+            await self.pil.initialize()
             asyncio.create_task(self._sync_watcher())
             yield
 
@@ -260,32 +261,6 @@ class TheFrameController:
             self.log.info('API version: {}'.format(api_version))
             self.api_version = 0 if int(api_version.replace('.','')) < 4000 else 1
 
-    async def get_tv_content(self, category='MY-C0002'):
-        '''
-        gets content_id list of category - either My Photos (MY-C0002) or Favourites (MY-C0004) from tv
-        '''
-        try:
-            result = [v['content_id'] for v in await self.tv.available(category, timeout=10)]
-        except AssertionError:
-            self.log.warning('failed to get contents from TV')
-            result = None
-        return result
-    
-    def get_folder_files(self):
-        '''
-        returns list of files in folder is extension matches allowed image types
-        '''
-        return [f for f in os.listdir(self.folder) if os.path.isfile(os.path.join(self.folder, f)) and self.get_file_type(os.path.join(self.folder, f)) in self.allowed_ext]
-
-    async def sync_file_list(self):
-        '''
-        if art has been deleted on tv, resyncronises uploaded_files with tv
-        '''
-        tv_contents = await self.get_tv_content('MY-C0002')
-        if tv_contents is not None:
-            self.tv_files = {k:v for k,v in self.tv_files.items() if v['content_id'] in tv_contents}
-            self.write_program_data()
-
     def read_uploaded_files(self, json_path):
         try:
             with open(json_path, "r") as f:
@@ -326,8 +301,9 @@ class TheFrameController:
         try:
             await self.tv.select_image(content_id)
             return content_id
-        except Exception:
-            return RuntimeError(f"Failed to select image for content_id {content_id}: {e}")
+        except Exception as e:
+            self.log.warning("Failed to select image for content_id {}: {}".format(content_id, e))
+            return None
         
     async def get_tv_content(self, category='MY-C0002'):
         '''
@@ -475,8 +451,7 @@ class TheFrameController:
         if file is uploaded, update the dictionary entry
         if content_id is None, file failed to upload, so remove it from the dict
         '''
-        if keywords is not None:
-            keywords_json = json.dumps(keywords)
+        keywords_json = json.dumps(keywords if keywords is not None else [])
         self.tv_files.pop(filename, None)
         if content_id:
             self.tv_files[filename] = {'content_id': content_id, 'keywords': keywords_json, 'modified':self.get_last_updated(filename)}
