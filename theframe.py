@@ -177,6 +177,7 @@ class TheFrameController:
     def __init__(self):
         @asynccontextmanager
         async def lifespan(_: FastAPI):
+            await self.get_api_version()
             await self.pil.initialize()
             asyncio.create_task(self._sync_watcher())
             yield
