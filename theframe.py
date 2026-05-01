@@ -6,7 +6,8 @@
 # It also includes PIL for image processing if available.
 # This code is designed to run in a Home Assistant environment, where it can be used as an add-on.
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
 import asyncio
@@ -754,6 +755,73 @@ class TheFrameController:
                 return {"status": "success", "settings": settings}
             except Exception as e:
                 return {"status": "error", "error": str(e)}
+
+        @self.app.get("/list_files")
+        async def list_files():
+            try:
+                await self.check_file_dict_availability(reload=True)
+                items = []
+                for filename, entry in self.tv_files.items():
+                    raw_kw = entry.get("keywords")
+                    if isinstance(raw_kw, str):
+                        try:
+                            kws = json.loads(raw_kw)
+                        except Exception:
+                            kws = []
+                    elif isinstance(raw_kw, list):
+                        kws = raw_kw
+                    else:
+                        kws = []
+                    items.append({
+                        "file_name": filename,
+                        "content_id": entry.get("content_id"),
+                        "keywords": kws,
+                        "modified": entry.get("modified"),
+                    })
+                items.sort(key=lambda x: x["file_name"].lower())
+                return {"status": "success", "files": items}
+            except Exception as e:
+                return {"status": "error", "error": str(e)}
+
+        @self.app.get("/thumbnail/{file_name:path}")
+        async def thumbnail(file_name: str, size: int = 320):
+            if not HAVE_PIL:
+                raise HTTPException(status_code=501, detail="PIL not available")
+            safe = os.path.basename(file_name)
+            path = os.path.join(self.folder, safe)
+            if not os.path.isfile(path):
+                raise HTTPException(status_code=404, detail="file not found")
+            size = max(64, min(int(size), 1024))
+            try:
+                with Image.open(path) as img:
+                    img = img.convert("RGB")
+                    img.thumbnail((size, size))
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG", quality=80)
+                    return Response(content=buf.getvalue(), media_type="image/jpeg",
+                                    headers={"Cache-Control": "public, max-age=86400"})
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/status")
+        async def status():
+            try:
+                in_artmode = await self.tv.in_artmode()
+            except Exception:
+                in_artmode = None
+            try:
+                current = await self.get_current_artwork()
+            except Exception:
+                current = None
+            return {
+                "status": "success",
+                "in_artmode": in_artmode,
+                "current_content_id": current,
+                "sync_pending": self._sync_pending,
+                "file_count": len(self.tv_files),
+                "slideshow_index": self.slideshow_index,
+                "slideshow_count": len(self.slideshow_files),
+            }
 
 # Instantiate the controller
 controller = TheFrameController()
