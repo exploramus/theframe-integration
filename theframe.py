@@ -177,8 +177,6 @@ class TheFrameController:
     def __init__(self):
         @asynccontextmanager
         async def lifespan(_: FastAPI):
-            await self.get_api_version()
-            await self.pil.initialize()
             asyncio.create_task(self._sync_watcher())
             yield
 
@@ -190,6 +188,7 @@ class TheFrameController:
         self.slideshow_index = 0
         self._sync_pending = False
         self._sync_lock = asyncio.Lock()
+        self._pil_initialized = False
         # Load configuration from /data/options.json
         try:
             with open("/data/options.json", "r") as config_file:
@@ -575,12 +574,28 @@ class TheFrameController:
 
     async def _sync_watcher(self):
         '''
-        background task: retries a pending sync every 60 s until the TV is ready.
+        background task: every 60 s, runs PIL initialisation the first time the TV
+        is reachable, then retries any pending sync.
         '''
         while True:
             await asyncio.sleep(60)
-            if self._sync_pending:
-                await self._run_pending_sync()
+            if not self._pil_initialized or self._sync_pending:
+                try:
+                    in_artmode = await self.tv.in_artmode()
+                except Exception as e:
+                    self.log.warning("TV state check failed: {}".format(e))
+                    continue
+                if not in_artmode:
+                    continue
+                if not self._pil_initialized:
+                    try:
+                        await self.get_api_version()
+                        await self.pil.initialize()
+                    except Exception as e:
+                        self.log.warning("PIL initialization failed: {}".format(e))
+                    self._pil_initialized = True
+                if self._sync_pending:
+                    await self._run_pending_sync()
 
 
     def setup_routes(self):
