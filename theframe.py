@@ -41,7 +41,7 @@ class PIL_methods:
     def __init__(self, mon):
         self.log = logging.getLogger('Main.'+__class__.__name__)
         self.mon = mon
-        self.folder = self.mon.json_path
+        self.folder = self.mon.folder
         self.uploaded_files = self.mon.tv_files
         
     async def initialize(self):
