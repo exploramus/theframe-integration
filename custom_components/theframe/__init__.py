@@ -28,6 +28,12 @@ from .const import (
 from .coordinator import TheFrameCoordinator
 from .view import register_views
 
+# Eager import so HA's media_source discovery finds the module already in
+# sys.modules and skips the blocking importlib.import_module call from the
+# event loop. The actual MediaSource is registered by HA via the platform
+# protocol; this line just primes the cache.
+from . import media_source as _media_source  # noqa: F401
+
 _LOGGER = logging.getLogger(__name__)
 
 SHOW_FILE_SCHEMA = vol.Schema({vol.Required("file_name"): cv.string})
