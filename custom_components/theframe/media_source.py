@@ -16,7 +16,7 @@ from homeassistant.components.media_source.models import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.network import async_sign_path
+from homeassistant.components.http import async_sign_path
 
 from .const import DATA_FILES, DOMAIN
 from .coordinator import TheFrameCoordinator
