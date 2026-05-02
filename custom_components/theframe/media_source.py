@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 import logging
 from urllib.parse import quote
 
@@ -15,11 +16,17 @@ from homeassistant.components.media_source.models import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.network import async_sign_path
 
 from .const import DATA_FILES, DOMAIN
 from .coordinator import TheFrameCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+# How long signed thumbnail URLs stay valid. Long enough to survive a media
+# browser session and a clicked-through preview, short enough that a leaked
+# URL is not useful indefinitely.
+_THUMBNAIL_SIGNATURE_TTL = timedelta(hours=12)
 
 MIME_TYPES = {
     "jpg": "image/jpeg",
@@ -61,8 +68,24 @@ class TheFrameMediaSource(MediaSource):
             return None
         return bucket["coordinator"]
 
-    def _thumb_url(self, entry_id: str, file_name: str) -> str:
-        return f"/api/theframe/{entry_id}/thumbnail/{quote(file_name, safe='')}"
+    def _signed(self, path: str) -> str:
+        """Sign an /api/theframe/... path so the frontend can fetch it.
+
+        Falls back to the unsigned path when no request context is available
+        (signing requires a user, which is present during browse_media /
+        resolve_media calls but not in standalone unit tests).
+        """
+        try:
+            return async_sign_path(self.hass, path, _THUMBNAIL_SIGNATURE_TTL)
+        except Exception as err:  # noqa: BLE001 — defensive, log and fall back
+            _LOGGER.debug("async_sign_path failed for %s: %s", path, err)
+            return path
+
+    def _thumb_url(self, entry_id: str, file_name: str, size: int = 320) -> str:
+        path = f"/api/theframe/{entry_id}/thumbnail/{quote(file_name, safe='')}"
+        if size != 320:
+            path = f"{path}?size={size}"
+        return self._signed(path)
 
     # ---------- media-source API ----------
 
@@ -75,7 +98,7 @@ class TheFrameMediaSource(MediaSource):
         if not self._coordinator(entry_id):
             raise Unresolvable("entry not loaded")
         # Use the proxied thumbnail at full-ish resolution as the media URL.
-        url = f"/api/theframe/{entry_id}/thumbnail/{quote(file_name, safe='')}?size=1024"
+        url = self._thumb_url(entry_id, file_name, size=1024)
         return PlayMedia(url=url, mime_type=_mime_for(file_name))
 
     async def async_browse_media(self, item: MediaSourceItem) -> BrowseMediaSource:
