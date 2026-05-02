@@ -1,0 +1,19 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "The Frame Controller",
+        "description": "Enter the URL of the running theframe-controller add-on. From inside Home Assistant the add-on is usually reachable at http://homeassistant.local:5000.",
+        "data": {
+          "base_url": "Add-on URL"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the add-on. Check that it is running and that the URL is correct."
+    },
+    "abort": {
+      "already_configured": "This add-on URL is already configured."
+    }
+  }
+}

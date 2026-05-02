@@ -1,0 +1,178 @@
+# Starter dashboard for the The Frame Controller integration.
+#
+# Two ways to use it:
+#
+#   A) Settings → Dashboards → "+ Add dashboard" → "New dashboard from scratch",
+#      open the new dashboard, click ⋮ → "Edit dashboard" → ⋮ → "Raw configuration
+#      editor", and paste the YAML below the `title:` line.
+#
+#   B) Add to configuration.yaml under `lovelace:` as a YAML-mode dashboard:
+#
+#        lovelace:
+#          dashboards:
+#            theframe:
+#              mode: yaml
+#              filename: dashboards/theframe.yaml
+#              title: The Frame
+#              icon: mdi:image-frame
+#              show_in_sidebar: true
+#
+# Replace the keyword switches in the "Categories" section with the ones the
+# integration generated for *your* library (see Developer Tools → States,
+# search `switch.the_frame_art_`).
+
+title: The Frame
+views:
+  - title: Slideshow
+    path: slideshow
+    icon: mdi:image-frame
+    type: sections
+    max_columns: 3
+    sections:
+
+      # ---------- Now playing ----------
+      - type: grid
+        cards:
+          - type: heading
+            heading: Now Playing
+            heading_style: title
+
+          - type: picture-entity
+            entity: image.the_frame_current_image
+            show_state: false
+            show_name: false
+            tap_action:
+              action: more-info
+
+          - type: tile
+            entity: sensor.the_frame_current_image
+            name: File
+            icon: mdi:image-text
+
+          - type: horizontal-stack
+            cards:
+              - type: tile
+                entity: binary_sensor.the_frame_in_art_mode
+                name: Art Mode
+              - type: tile
+                entity: binary_sensor.the_frame_sync_pending
+                name: Sync Pending
+
+      # ---------- Slideshow controls ----------
+      - type: grid
+        cards:
+          - type: heading
+            heading: Slideshow
+            heading_style: title
+
+          - type: tile
+            entity: switch.the_frame_slideshow
+            features:
+              - type: toggle
+
+          - type: tile
+            entity: number.the_frame_slideshow_interval
+            features:
+              - type: numeric-input
+                style: buttons
+
+          - type: tile
+            entity: select.the_frame_keyword
+            name: Quick keyword
+
+          - type: horizontal-stack
+            cards:
+              - type: button
+                name: Previous
+                icon: mdi:chevron-left
+                show_state: false
+                tap_action:
+                  action: perform-action
+                  perform_action: button.press
+                  target:
+                    entity_id: button.the_frame_previous_image
+              - type: button
+                name: Next
+                icon: mdi:chevron-right
+                show_state: false
+                tap_action:
+                  action: perform-action
+                  perform_action: button.press
+                  target:
+                    entity_id: button.the_frame_next_image
+
+      # ---------- Library ----------
+      - type: grid
+        cards:
+          - type: heading
+            heading: Library
+            heading_style: title
+
+          - type: tile
+            entity: sensor.the_frame_image_count
+            name: Images on TV
+
+          - type: button
+            name: Browse images
+            icon: mdi:image-multiple
+            show_state: false
+            tap_action:
+              action: navigate
+              navigation_path: /media-browser
+            # Opens the standard Media Browser; pick "The Frame" in the source list.
+
+          - type: button
+            name: Sync now
+            icon: mdi:cloud-sync
+            show_state: false
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.the_frame_sync_files
+
+      # ---------- Categories ----------
+      # Vanilla version: list each keyword switch explicitly.
+      # If you have HACS + auto-entities, see the snippet at the bottom of
+      # this file for an automatic version.
+      - type: grid
+        cards:
+          - type: heading
+            heading: Categories
+            heading_style: title
+
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: switch.the_frame_art_natur
+              - entity: switch.the_frame_art_landschaft
+              - entity: switch.the_frame_art_blumen
+              - entity: switch.the_frame_art_blute
+              - entity: switch.the_frame_art_architektur
+              - entity: switch.the_frame_art_kunst
+              - entity: switch.the_frame_art_photoart
+              - entity: switch.the_frame_art_luftaufnahme
+              - entity: switch.the_frame_art_dynamics
+              - entity: switch.the_frame_art_shoreshades
+              - entity: switch.the_frame_art_buildshades
+              - entity: switch.the_frame_art_hamburg
+              - entity: switch.the_frame_art_tiere
+              - entity: switch.the_frame_art_julia
+              - entity: switch.the_frame_art_theframe
+
+# ---------------------------------------------------------------------------
+# Optional: dynamic Categories card using auto-entities (HACS).
+# Replaces the static "entities" card above with one that picks up new
+# keyword switches automatically as soon as the integration discovers them.
+#
+#  - type: custom:auto-entities
+#    card:
+#      type: entities
+#      title: Categories
+#      show_header_toggle: false
+#    filter:
+#      include:
+#        - entity_id: switch.the_frame_art_*
+#    sort:
+#      method: friendly_name
+# ---------------------------------------------------------------------------

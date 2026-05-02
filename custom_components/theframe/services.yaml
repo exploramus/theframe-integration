@@ -1,0 +1,35 @@
+show_file:
+  name: Show file
+  description: Display a specific image file on The Frame.
+  fields:
+    file_name:
+      name: File name
+      description: File name as known to the add-on (e.g. "sunset.jpg").
+      required: true
+      example: sunset.jpg
+      selector:
+        text:
+
+show_image:
+  name: Show image
+  description: Display a specific image by Samsung content ID.
+  fields:
+    content_id:
+      name: Content ID
+      description: Content ID returned by the TV.
+      required: true
+      example: MY_F0001
+      selector:
+        text:
+
+sync_files:
+  name: Sync files
+  description: Compare the local image folder with the TV and reconcile.
+
+next:
+  name: Next image
+  description: Advance the slideshow to the next image.
+
+previous:
+  name: Previous image
+  description: Go back to the previous slideshow image.
