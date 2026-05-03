@@ -9,9 +9,12 @@ for media-source items from this integration.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 from urllib.parse import unquote, urlparse
+
+import aiohttp
 
 from homeassistant.components import media_source
 from homeassistant.components.media_player import (
@@ -23,6 +26,7 @@ from homeassistant.components.media_player import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .api import TheFrameApiError
@@ -77,13 +81,40 @@ class TheFramePlayer(TheFrameEntity, MediaPlayerEntity):
 
     @property
     def media_title(self) -> str | None:
-        status = (self.coordinator.data or {}).get(DATA_STATUS) or {}
-        files = (self.coordinator.data or {}).get(DATA_FILES) or []
-        cid = status.get("current_content_id")
-        if not cid:
-            return None
-        match = next((f for f in files if f.get("content_id") == cid), None)
+        match = self._current_file_entry()
         return match.get("file_name") if match else None
+
+    @property
+    def media_image_url(self) -> str | None:
+        """Add-on thumbnail URL for the cover.
+
+        Set primarily so HA derives a stable media_image_hash from it
+        (the hash drives the cache-busting token in the proxy URL the
+        frontend asks for). The actual byte fetch is overridden in
+        async_get_media_image below for explicit error handling.
+        """
+        match = self._current_file_entry()
+        if not match:
+            return None
+        return self.coordinator.api.thumbnail_url(match["file_name"], size=1024)
+
+    async def async_get_media_image(self) -> tuple[bytes | None, str | None]:
+        """Provide the now-playing cover for the player UI."""
+        match = self._current_file_entry()
+        if not match:
+            return None, None
+        url = self.coordinator.api.thumbnail_url(match["file_name"], size=1024)
+        session = async_get_clientsession(self.hass)
+        try:
+            async with session.get(
+                url, timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                if resp.status != 200:
+                    return None, None
+                return await resp.read(), "image/jpeg"
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+            _LOGGER.debug("Fetching media image failed: %s", err)
+            return None, None
 
     # ---------- actions ----------
 
@@ -120,8 +151,22 @@ class TheFramePlayer(TheFrameEntity, MediaPlayerEntity):
     async def async_browse_media(
         self, media_content_type: str | None = None, media_content_id: str | None = None
     ) -> BrowseMedia:
-        # Restrict to image content. By default scopes the player's "browse"
-        # view to media sources that can deliver images.
+        """Restrict the player's browse view to images already uploaded to The Frame.
+
+        Anything else cannot be displayed in art mode (the add-on is what
+        manages the upload pipeline), so showing other media sources here
+        would just lead to "play does nothing" surprises.
+        """
+        own_root = f"media-source://{DOMAIN}/{self.coordinator.entry.entry_id}"
+        # The frontend can pass None, "", "media-source://" or our own URI
+        # depending on entry-point and version. Treat all non-specific
+        # values as "open at the root of our own source".
+        if not media_content_id or media_content_id in (
+            "media-source://",
+            f"media-source://{DOMAIN}",
+        ):
+            media_content_id = own_root
+        _LOGGER.debug("Player browse_media -> %s", media_content_id)
         return await media_source.async_browse_media(
             self.hass,
             media_content_id,
@@ -131,6 +176,14 @@ class TheFramePlayer(TheFrameEntity, MediaPlayerEntity):
         )
 
     # ---------- helpers ----------
+
+    def _current_file_entry(self) -> dict | None:
+        status = (self.coordinator.data or {}).get(DATA_STATUS) or {}
+        files = (self.coordinator.data or {}).get(DATA_FILES) or []
+        cid = status.get("current_content_id")
+        if not cid:
+            return None
+        return next((f for f in files if f.get("content_id") == cid), None)
 
     def _extract_file_name(self, media_id: str) -> str | None:
         """Pull the add-on file name out of whatever URL form HA hands us.

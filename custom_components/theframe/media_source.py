@@ -18,7 +18,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.components.http.auth import async_sign_path
 
-from .const import DATA_FILES, DOMAIN
+from .const import DATA_FILES, DATA_STATUS, DOMAIN
 from .coordinator import TheFrameCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -67,6 +67,32 @@ class TheFrameMediaSource(MediaSource):
         if not bucket or "coordinator" not in bucket:
             return None
         return bucket["coordinator"]
+
+    def _entry_thumbnail(self, entry_id: str, coordinator: TheFrameCoordinator) -> str | None:
+        """Pick a representative thumbnail for an entry.
+
+        Prefers the image currently shown on the TV (so the source icon
+        doubles as a live preview); falls back to the first known file,
+        and ultimately to None which lets HA show its generic folder icon.
+        """
+        status = (coordinator.data or {}).get(DATA_STATUS) or {}
+        files = (coordinator.data or {}).get(DATA_FILES, []) or []
+        if not files:
+            return None
+        cid = status.get("current_content_id")
+        if cid:
+            match = next((f for f in files if f.get("content_id") == cid), None)
+            if match:
+                return self._thumb_url(entry_id, match["file_name"])
+        return self._thumb_url(entry_id, files[0]["file_name"])
+
+    def _root_thumbnail(self) -> str | None:
+        """Thumbnail for the source-picker entry — first entry that has data."""
+        for eid, bucket in self._entries().items():
+            thumb = self._entry_thumbnail(eid, bucket["coordinator"])
+            if thumb:
+                return thumb
+        return None
 
     def _signed(self, path: str) -> str:
         """Sign an /api/theframe/... path so the frontend can fetch it.
@@ -155,6 +181,7 @@ class TheFrameMediaSource(MediaSource):
                 title=bucket["coordinator"].entry.title or "The Frame",
                 can_play=False,
                 can_expand=True,
+                thumbnail=self._entry_thumbnail(eid, bucket["coordinator"]),
             )
             for eid, bucket in self._entries().items()
         ]
@@ -168,6 +195,7 @@ class TheFrameMediaSource(MediaSource):
             can_expand=True,
             children_media_class=MediaClass.DIRECTORY,
             children=children,
+            thumbnail=self._root_thumbnail(),
         )
 
     def _browse_entry(
@@ -211,6 +239,7 @@ class TheFrameMediaSource(MediaSource):
             can_expand=True,
             children_media_class=MediaClass.DIRECTORY,
             children=children,
+            thumbnail=self._entry_thumbnail(entry_id, coordinator),
         )
 
     def _browse_all(
