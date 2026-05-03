@@ -27,4 +27,13 @@ DATA_STATUS = "status"
 DATA_KEYWORDS = "keywords"
 DATA_FILES = "files"
 
-PLATFORMS = ["switch", "number", "button", "select", "sensor", "binary_sensor", "image"]
+PLATFORMS = [
+    "switch",
+    "number",
+    "button",
+    "select",
+    "sensor",
+    "binary_sensor",
+    "image",
+    "media_player",
+]

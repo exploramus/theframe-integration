@@ -71,14 +71,24 @@ class TheFrameMediaSource(MediaSource):
     def _signed(self, path: str) -> str:
         """Sign an /api/theframe/... path so the frontend can fetch it.
 
-        Falls back to the unsigned path when no request context is available
-        (signing requires a user, which is present during browse_media /
-        resolve_media calls but not in standalone unit tests).
+        Uses the refresh token from the current websocket / HTTP request
+        context. Signing with HA's content user is rejected by HA's auth
+        middleware for views with requires_auth=True, so we deliberately
+        do NOT pass use_content_user here.
+
+        Falls back to the unsigned path when there's no usable context.
+        Grid thumbnails still load fine in that case via the browser
+        session cookie; only the resolved media URL (clicked image in
+        the media browser) really depends on the signature.
         """
         try:
             return async_sign_path(self.hass, path, _THUMBNAIL_SIGNATURE_TTL)
         except Exception as err:  # noqa: BLE001 — defensive, log and fall back
-            _LOGGER.debug("async_sign_path failed for %s: %s", path, err)
+            _LOGGER.warning(
+                "async_sign_path failed for %s, returning unsigned URL: %s",
+                path,
+                err,
+            )
             return path
 
     def _thumb_url(self, entry_id: str, file_name: str, size: int = 320) -> str:
@@ -95,10 +105,21 @@ class TheFrameMediaSource(MediaSource):
         if len(parts) != 3 or parts[1] != "file":
             raise Unresolvable(f"unsupported identifier: {item.identifier}")
         entry_id, _, file_name = parts
-        if not self._coordinator(entry_id):
+        coordinator = self._coordinator(entry_id)
+        if not coordinator:
             raise Unresolvable("entry not loaded")
-        # Use the proxied thumbnail at full-ish resolution as the media URL.
-        url = self._thumb_url(entry_id, file_name, size=1024)
+        # Bypass the HA-side proxy here. Returning the add-on's own URL
+        # (e.g. http://homeassistant.local:5000/thumbnail/<file>?size=1024)
+        # avoids two failure modes for external players (DLNA, Cast):
+        #   - they don't carry an HA auth context, so signed proxy URLs
+        #     don't help them
+        #   - some renderers strip query strings or can't resolve the
+        #     same hostnames the browser uses
+        # The add-on has no auth and lives on the LAN, which is exactly
+        # what DLNA / Cast expect to find at the other end of a media URL.
+        # Grid thumbnails still go through the proxy, where browser
+        # cookies / signed URLs do the right thing.
+        url = coordinator.api.thumbnail_url(file_name, size=1024)
         return PlayMedia(url=url, mime_type=_mime_for(file_name))
 
     async def async_browse_media(self, item: MediaSourceItem) -> BrowseMediaSource:

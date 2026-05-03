@@ -30,8 +30,11 @@ Copy `custom_components/theframe/` into your Home Assistant `<config>/custom_com
 | `sensor.the_frame_image_count`, `sensor.the_frame_slideshow_position` | n/a — new |
 | `binary_sensor.the_frame_in_art_mode`, `binary_sensor.the_frame_sync_pending` | n/a — new |
 | `image.the_frame_current_image` (live thumbnail of what's on the TV) | n/a — new |
+| `media_player.the_frame_player` — accepts Play actions from the media browser, mapped to `show_file` | n/a — new |
 | Services `theframe.show_file`, `show_image`, `sync_files`, `next`, `previous` | `rest_command.*` |
 | Media Source "The Frame" | n/a — new feature: browse images with thumbnails |
+
+> **Note on "Play" in the media browser:** The Frame's art mode is *not* a DLNA renderer — pushing an image to the TV via DLNA does not land in art mode. Pick **The Frame Player** as the target instead; it routes the selection to the `show_file` endpoint and the image appears in art mode within a second.
 
 The keyword switches appear automatically as soon as the add-on reports new keywords through `/available_keywords`. No more handwritten `template: - switch:` blocks per keyword.
 
