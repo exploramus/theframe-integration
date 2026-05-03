@@ -155,6 +155,14 @@ def _register_services(
                 len(missing),
                 ", ".join(missing),
             )
+        # The add-on is now driving the slideshow from an explicit file
+        # list, not from keyword filtering. Clear our keyword-filter state
+        # so the per-keyword switches stop claiming to be active. Toggling
+        # any keyword switch afterwards will re-enter keyword mode and
+        # overwrite the playlist via push_slideshow_keywords — which is
+        # the expected "switch back to keyword mode" gesture.
+        coordinator.active_keywords.clear()
+        coordinator.async_update_listeners()
         if call.data.get("start", True):
             try:
                 await api.show_slideshow_next()

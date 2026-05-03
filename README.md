@@ -101,6 +101,20 @@ Service parameters (full list also visible in **Developer Tools → Services →
 | `slideshow_index` | `0` | Which item in the list to start at (0-based). |
 | `start` | `true` | Show the first item immediately after loading. Set to `false` if you want to load a playlist but only have it advance on the next timer tick. |
 
+### Playlist mode vs. keyword mode
+
+The slideshow is in exactly one of two modes at any time, and they don't compose:
+
+- **Keyword mode** — driven by the `switch.the_frame_art_*` switches. The set of active switches becomes the keyword filter; the add-on builds the slideshow from images that match any of those keywords.
+- **Playlist mode** — driven by `theframe.play_files`. The slideshow runs through the explicit, ordered file list you handed in.
+
+Switching modes is a one-way replacement, never an additive operation:
+
+- Calling `theframe.play_files` clears all active keyword switches (they show OFF afterwards) and the playlist takes over.
+- Toggling any keyword switch re-enters keyword mode and replaces the playlist with the keyword-filtered set.
+
+In both modes, `switch.the_frame_slideshow`, `number.the_frame_slideshow_interval`, the next/previous buttons and the media player work the same way — they just walk through whichever set of files is currently loaded.
+
 Add-on requirement: v1.0.17+ (introduces the `/initialize_slideshow_files` endpoint).
 
 ## Starter dashboard
