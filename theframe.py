@@ -253,6 +253,10 @@ class TheFrameController:
     class SlideshowIndexRequest(BaseModel):
         slideshow_index: int
 
+    class SlideshowFilesRequest(BaseModel):
+        file_names: list[str]
+        slideshow_index: int = 0
+
     async def get_api_version(self):
             '''
             checks api version to see if it's old (<2021) or new type
@@ -664,6 +668,55 @@ class TheFrameController:
             if self.slideshow_index < 0 or self.slideshow_index >= len(self.slideshow_files):
                 self.slideshow_index = 0
             return {"status": "success", "slideshow": self.slideshow_files, "index": self.slideshow_index}
+
+        @self.app.post("/initialize_slideshow_files")
+        async def initialize_slideshow_files(req: self.SlideshowFilesRequest):
+            '''
+            Set the active slideshow to an explicit, ordered list of file names
+            (curated playlist). The same slideshow_files / slideshow_index state
+            is reused, so /show_slideshow_next, /show_slideshow_previous,
+            /show_slideshow_index and the existing slideshow timer all work
+            unchanged on the loaded playlist.
+
+            Files not currently uploaded to the TV are skipped and reported in
+            the "missing" key of the response. Order is preserved (Python dicts
+            keep insertion order); duplicate file names are collapsed.
+            '''
+            if not req.file_names:
+                return {"status": "error", "error": "No file names provided"}
+            await self.check_file_dict_availability(reload=True)
+
+            accepted = {}
+            missing = []
+            for fname in req.file_names:
+                if fname in self.tv_files:
+                    accepted[fname] = self.tv_files[fname]
+                else:
+                    missing.append(fname)
+
+            if not accepted:
+                return {
+                    "status": "error",
+                    "error": "None of the provided files are uploaded to the TV",
+                    "missing": missing,
+                }
+
+            self.slideshow_files = accepted
+            if (
+                not isinstance(req.slideshow_index, int)
+                or req.slideshow_index < 0
+                or req.slideshow_index >= len(self.slideshow_files)
+            ):
+                self.slideshow_index = 0
+            else:
+                self.slideshow_index = req.slideshow_index
+
+            return {
+                "status": "success",
+                "count": len(self.slideshow_files),
+                "missing": missing,
+                "index": self.slideshow_index,
+            }
 
         @self.app.post("/show_slideshow_next")
         async def show_slideshow_next():

@@ -11,3 +11,4 @@
 1.0.14 Asynchronous queued sync in case TV is off or in art modes
 1.0.15 Initialize PIL methods during lifespan and improve error handling in image selection
 1.0.16 New endpoints /list_files, /thumbnail/{file_name}, /status for the companion HA integration
+1.0.17 New endpoint /initialize_slideshow_files for ordered, file-based playlists (curated slideshows)
