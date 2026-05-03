@@ -33,3 +33,37 @@ next:
 previous:
   name: Previous image
   description: Go back to the previous slideshow image.
+
+play_files:
+  name: Play files
+  description: >-
+    Load an ordered list of file names as the active slideshow (a curated
+    "playlist"). Subsequent next / previous / interval-based advances walk
+    through this list. Files not currently uploaded to the TV are skipped
+    with a warning in the log.
+  fields:
+    file_names:
+      name: File names
+      description: Ordered list of file names exactly as known to the add-on.
+      required: true
+      example: "[sunset_01.jpg, harbor_evening.jpg, lighthouse.jpg]"
+      selector:
+        text:
+          multiple: true
+    slideshow_index:
+      name: Start index
+      description: Which item in the list to start at (0-based).
+      default: 0
+      selector:
+        number:
+          min: 0
+          mode: box
+    start:
+      name: Show immediately
+      description: >-
+        Show the first item right away after loading. If false, the playlist
+        is loaded but nothing is shown until the slideshow timer fires or
+        next / previous is called.
+      default: true
+      selector:
+        boolean:

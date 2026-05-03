@@ -20,6 +20,7 @@ from .const import (
     DOMAIN,
     PLATFORMS,
     SERVICE_NEXT,
+    SERVICE_PLAY_FILES,
     SERVICE_PREVIOUS,
     SERVICE_SHOW_FILE,
     SERVICE_SHOW_IMAGE,
@@ -38,6 +39,15 @@ _LOGGER = logging.getLogger(__name__)
 
 SHOW_FILE_SCHEMA = vol.Schema({vol.Required("file_name"): cv.string})
 SHOW_IMAGE_SCHEMA = vol.Schema({vol.Required("content_id"): cv.string})
+PLAY_FILES_SCHEMA = vol.Schema(
+    {
+        vol.Required("file_names"): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional("slideshow_index", default=0): vol.All(
+            vol.Coerce(int), vol.Range(min=0)
+        ),
+        vol.Optional("start", default=True): cv.boolean,
+    }
+)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -82,6 +92,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 SERVICE_SYNC_FILES,
                 SERVICE_NEXT,
                 SERVICE_PREVIOUS,
+                SERVICE_PLAY_FILES,
             ):
                 hass.services.async_remove(DOMAIN, svc)
     return unloaded
@@ -127,11 +138,36 @@ def _register_services(
         except TheFrameApiError as err:
             _LOGGER.error("previous failed: %s", err)
 
+    async def _play_files(call: ServiceCall) -> None:
+        try:
+            result = await api.initialize_slideshow_files(
+                call.data["file_names"], call.data.get("slideshow_index", 0)
+            )
+        except TheFrameApiError as err:
+            _LOGGER.error("play_files failed: %s", err)
+            return
+        if result.get("status") != "success":
+            _LOGGER.error("play_files: %s", result.get("error"))
+            return
+        if missing := result.get("missing"):
+            _LOGGER.warning(
+                "play_files: %d file(s) skipped because not uploaded: %s",
+                len(missing),
+                ", ".join(missing),
+            )
+        if call.data.get("start", True):
+            try:
+                await api.show_slideshow_next()
+            except TheFrameApiError as err:
+                _LOGGER.error("play_files: initial show failed: %s", err)
+        await coordinator.async_request_refresh()
+
     hass.services.async_register(DOMAIN, SERVICE_SHOW_FILE, _show_file, SHOW_FILE_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_SHOW_IMAGE, _show_image, SHOW_IMAGE_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_SYNC_FILES, _sync)
     hass.services.async_register(DOMAIN, SERVICE_NEXT, _next)
     hass.services.async_register(DOMAIN, SERVICE_PREVIOUS, _prev)
+    hass.services.async_register(DOMAIN, SERVICE_PLAY_FILES, _play_files, PLAY_FILES_SCHEMA)
 
 
 def _arm_slideshow_timer(

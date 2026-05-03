@@ -17,7 +17,6 @@ Before deleting anything, confirm the new world works:
    - `switch.the_frame_slideshow`
    - one `switch.the_frame_art_<keyword>` per keyword the add-on knows
    - `number.the_frame_slideshow_interval`
-   - `select.the_frame_keyword`
    - `sensor.the_frame_current_image`, `image_count`
    - `binary_sensor.the_frame_in_art_mode`, `sync_pending`
    - `button.the_frame_sync_files`, `next_image`, `previous_image`
@@ -57,7 +56,6 @@ homekit:
       include_entities:
         - switch.the_frame_slideshow
         - number.the_frame_slideshow_interval
-        - select.the_frame_keyword
         - switch.the_frame_art_natur
         - switch.the_frame_art_landschaft
         # ... one line per keyword switch you want in Apple Home

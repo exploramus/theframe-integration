@@ -25,7 +25,6 @@ Copy `custom_components/theframe/` into your Home Assistant `<config>/custom_com
 | `number.the_frame_slideshow_interval` | `input_number.theframe_interval` + HomeKit-bridge automations |
 | `button.the_frame_sync_files` | `rest_command.sync_files` + `shell_command.image_sync` |
 | `button.the_frame_next_image` / `previous_image` | `rest_command.show_slideshow_*` |
-| `select.the_frame_keyword` | `input_select.theframe_slideshow_keyword_select` + the two sync automations |
 | `sensor.the_frame_current_image` (with file_name + keywords as attributes) | n/a — new |
 | `sensor.the_frame_image_count`, `sensor.the_frame_slideshow_position` | n/a — new |
 | `binary_sensor.the_frame_in_art_mode`, `binary_sensor.the_frame_sync_pending` | n/a — new |
@@ -64,11 +63,45 @@ Some keywords are housekeeping markers rather than real categories — e.g. `The
 Open **Settings → Devices & Services → The Frame → Configure** and enter the keywords to hide as a comma-separated list (e.g. `TheFrame, exportiert`). The integration reloads automatically and:
 
 - removes the corresponding `switch.the_frame_art_<keyword>` entities,
-- drops them from the `select.the_frame_keyword` options,
 - excludes the per-keyword folders from the Media Browser source,
 - strips the keyword from the file-level metadata exposed by sensors.
 
 Per-image data on the add-on is untouched; the filter is applied client-side in the integration.
+
+## Curated playlists
+
+For ordered, hand-picked image sequences (something keyword filters can't express), call the `theframe.play_files` service with an ordered list of file names. The list becomes the active slideshow — the existing slideshow timer, the next/previous buttons and `media_player.the_frame_player` all walk through it in order.
+
+Define playlists as plain HA scripts:
+
+```yaml
+script:
+  the_frame_sunset_show:
+    alias: "TheFrame: Sunset show"
+    sequence:
+      - action: theframe.play_files
+        data:
+          file_names:
+            - sunset_01.jpg
+            - sunset_02.jpg
+            - harbor_evening.jpg
+            - lighthouse.jpg
+      - action: switch.turn_on
+        target:
+          entity_id: switch.the_frame_slideshow
+```
+
+Calling that script loads the four images in that exact order and turns the auto-advance on. The interval entity (`number.the_frame_slideshow_interval`) controls how long each image stays. To stop the auto-advance, turn the slideshow switch off — the playlist stays loaded so you can step through it manually with `button.the_frame_next_image` / `button.the_frame_previous_image` or via `media_player.the_frame_player`.
+
+Service parameters (full list also visible in **Developer Tools → Services → theframe.play_files**):
+
+| Field | Default | What it does |
+| --- | --- | --- |
+| `file_names` | required | Ordered list of file names exactly as the add-on knows them. Files not on the TV are skipped with a log warning. |
+| `slideshow_index` | `0` | Which item in the list to start at (0-based). |
+| `start` | `true` | Show the first item immediately after loading. Set to `false` if you want to load a playlist but only have it advance on the next timer tick. |
+
+Add-on requirement: v1.0.17+ (introduces the `/initialize_slideshow_files` endpoint).
 
 ## Starter dashboard
 

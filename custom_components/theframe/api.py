@@ -77,6 +77,15 @@ class TheFrameApi:
             json={"keyword_list": keywords, "slideshow_index": index},
         )
 
+    async def initialize_slideshow_files(
+        self, file_names: list[str], index: int = 0
+    ) -> dict:
+        return await self._request(
+            "POST",
+            "/initialize_slideshow_files",
+            json={"file_names": file_names, "slideshow_index": index},
+        )
+
     async def show_slideshow_next(self) -> dict:
         return await self._request("POST", "/show_slideshow_next")
 
