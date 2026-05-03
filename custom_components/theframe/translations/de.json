@@ -7,13 +7,32 @@
         "data": {
           "base_url": "Add-on URL"
         }
+      },
+      "reconfigure": {
+        "title": "The Frame neu konfigurieren",
+        "description": "Add-on-URL aktualisieren. Sinnvoll, wenn der Add-on auf einen anderen Host oder Port umgezogen ist. Bestehende Entitäten und ihre Historie bleiben erhalten.",
+        "data": {
+          "base_url": "Add-on URL"
+        }
       }
     },
     "error": {
       "cannot_connect": "Add-on nicht erreichbar. Bitte prüfen, ob es läuft und die URL stimmt."
     },
     "abort": {
-      "already_configured": "Diese Add-on-URL ist bereits eingerichtet."
+      "already_configured": "Diese Add-on-URL ist bereits eingerichtet.",
+      "reconfigure_successful": "Add-on-URL aktualisiert."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "The Frame Optionen",
+        "description": "Komma-separierte Liste von Keywords, die in dieser Integration ausgeblendet werden. Nützlich für Marker-Tags wie \"TheFrame\" oder \"exportiert\", die du in deiner Fotosammlung als Hilfsmarker pflegst, die aber keinen eigenen Switch / Media-Browser-Ordner brauchen. Verborgene Keywords verschwinden auch aus den Datei-Metadaten.",
+        "data": {
+          "ignore_keywords": "Ignorierte Keywords"
+        }
+      }
     }
   }
 }

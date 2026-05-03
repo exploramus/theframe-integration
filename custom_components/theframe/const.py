@@ -7,6 +7,8 @@ DOMAIN = "theframe"
 CONF_BASE_URL = "base_url"
 DEFAULT_BASE_URL = "http://homeassistant.local:5000"
 
+CONF_IGNORE_KEYWORDS = "ignore_keywords"
+
 UPDATE_INTERVAL_SECONDS = 60
 
 # Slideshow advance is driven from inside the integration so the user no

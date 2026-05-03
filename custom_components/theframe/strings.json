@@ -7,13 +7,32 @@
         "data": {
           "base_url": "Add-on URL"
         }
+      },
+      "reconfigure": {
+        "title": "Reconfigure The Frame",
+        "description": "Update the URL of the theframe-controller add-on. Use this if the add-on moved to a different host or port. Existing entities and their history are preserved.",
+        "data": {
+          "base_url": "Add-on URL"
+        }
       }
     },
     "error": {
       "cannot_connect": "Could not reach the add-on. Check that it is running and that the URL is correct."
     },
     "abort": {
-      "already_configured": "This add-on URL is already configured."
+      "already_configured": "This add-on URL is already configured.",
+      "reconfigure_successful": "Add-on URL updated."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "The Frame options",
+        "description": "Comma-separated list of keywords to hide from this integration. Useful for marker tags like \"TheFrame\" or \"exportiert\" that you maintain in your photo library for housekeeping but that don't need their own switch / media-browser folder. Hidden keywords also disappear from per-file metadata.",
+        "data": {
+          "ignore_keywords": "Ignored keywords"
+        }
+      }
     }
   }
 }

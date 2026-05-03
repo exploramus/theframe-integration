@@ -13,7 +13,14 @@ from homeassistant.helpers.update_coordinator import (
 )
 
 from .api import TheFrameApi, TheFrameApiError
-from .const import DATA_FILES, DATA_KEYWORDS, DATA_STATUS, DOMAIN, UPDATE_INTERVAL_SECONDS
+from .const import (
+    CONF_IGNORE_KEYWORDS,
+    DATA_FILES,
+    DATA_KEYWORDS,
+    DATA_STATUS,
+    DOMAIN,
+    UPDATE_INTERVAL_SECONDS,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,6 +53,20 @@ class TheFrameCoordinator(DataUpdateCoordinator[dict]):
             files = await self.api.list_files()
         except TheFrameApiError as err:
             raise UpdateFailed(str(err)) from err
+
+        ignored = set(self.entry.options.get(CONF_IGNORE_KEYWORDS, []) or [])
+        if ignored:
+            keywords = [k for k in keywords if k not in ignored]
+            files = [
+                {
+                    **f,
+                    "keywords": [
+                        k for k in (f.get("keywords") or []) if k not in ignored
+                    ],
+                }
+                for f in files
+            ]
+
         return {
             DATA_STATUS: status,
             DATA_KEYWORDS: keywords,

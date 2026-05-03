@@ -21,7 +21,7 @@ Copy `custom_components/theframe/` into your Home Assistant `<config>/custom_com
 | Entity / feature | Replaces in DOCS.md |
 | --- | --- |
 | `switch.the_frame_slideshow` | `input_boolean.the_frame_show` + the `time_pattern` slideshow automation |
-| `switch.the_frame_art_<keyword>` (one per keyword, generated dynamically) | All `template:` switches |
+| `switch.the_frame_art_<keyword>` (one per keyword, generated dynamically; German umlauts are transliterated so `Blüte` becomes `bluete` instead of `blute`) | All `template:` switches |
 | `number.the_frame_slideshow_interval` | `input_number.theframe_interval` + HomeKit-bridge automations |
 | `button.the_frame_sync_files` | `rest_command.sync_files` + `shell_command.image_sync` |
 | `button.the_frame_next_image` / `previous_image` | `rest_command.show_slideshow_*` |
@@ -52,6 +52,23 @@ tap_action:
   service_data:
     file_name: sunset.jpg
 ```
+
+## Changing the add-on URL after install
+
+If the add-on moves to a different host or port (or you mistyped the URL during initial setup), open **Settings → Devices & Services → The Frame → ⋮ → Reconfigure**. Enter the new URL — entities and their history are kept; only the connection target is swapped.
+
+## Hiding unwanted keywords
+
+Some keywords are housekeeping markers rather than real categories — e.g. `TheFrame` if you tag every uploaded photo with it, or `exportiert` if your photo app sets that as part of the export workflow. Keywords like these would otherwise produce empty-feeling switches and one big media-browser folder containing the whole library.
+
+Open **Settings → Devices & Services → The Frame → Configure** and enter the keywords to hide as a comma-separated list (e.g. `TheFrame, exportiert`). The integration reloads automatically and:
+
+- removes the corresponding `switch.the_frame_art_<keyword>` entities,
+- drops them from the `select.the_frame_keyword` options,
+- excludes the per-keyword folders from the Media Browser source,
+- strips the keyword from the file-level metadata exposed by sensors.
+
+Per-image data on the add-on is untouched; the filter is applied client-side in the integration.
 
 ## Starter dashboard
 
