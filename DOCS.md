@@ -22,9 +22,9 @@ If the TV is off or not in Art Mode when `/sync_files` is called, the sync is qu
 
 rclone must be installed at `/config/scripts/rclone` and configured at `/config/scripts/rclone.conf` with a remote named `OneDrive`.
 
-### Startup reconciliation
+### Thumbnail reconciliation
 
-If PIL (Pillow) is installed, the controller will reconcile `uploaded_files.json` against the TV's actual uploaded content on first connection by downloading and comparing thumbnails. This recovers content IDs that may be missing from the JSON file, for example after a reinstall or if the file was lost. The reconciliation runs in the background and does not block the API from starting.
+If PIL (Pillow) is installed, the `/reconcile_files` endpoint reconciles `uploaded_files.json` against the TV's actual uploaded content by downloading and comparing thumbnails. This recovers content IDs that may be missing from the JSON file, for example after a reinstall or if the file was lost. The operation can be slow on low-powered hardware and is therefore triggered on demand rather than automatically. It does not need to be called during normal operation — only when the local file list is known to be out of sync with the TV.
 
 ### Image keywords
 
