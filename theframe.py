@@ -647,20 +647,50 @@ class TheFrameController:
             if not slideshow_keywords:
                 return {"status": "error", "error": "No slideshow keywords to show"}
             await self.check_file_dict_availability(reload=True)
-            if self.tv_files:
-                self.slideshow_files = {}
-                # Filter files based on keywords
-                for k, v in self.tv_files.items():
-                    if v.get("keywords") and any(keyword in v["keywords"] for keyword in slideshow_keywords):
-                        self.slideshow_files[k] = v
-                # self.slideshow_files = {k: v for k, v in self.tv_files.items() if k in slideshow_filesnames}
-            if not self.slideshow_files:
+
+            wanted = set(slideshow_keywords)
+            matched = {}
+            for k, v in self.tv_files.items():
+                raw = v.get("keywords")
+                if not raw:
+                    continue
+                # Stored either as a JSON-encoded string (the normal case) or
+                # already as a list (legacy / external writers). Decode either
+                # to a real list and do an exact-membership check — the old
+                # substring match on the JSON string broke for any keyword
+                # that json.dumps escapes (German umlauts produced "Blüte"
+                # which never matched "Blüte").
+                if isinstance(raw, str):
+                    try:
+                        file_keywords = json.loads(raw)
+                    except Exception:
+                        continue
+                else:
+                    file_keywords = raw
+                if not isinstance(file_keywords, list):
+                    continue
+                if wanted.intersection(file_keywords):
+                    matched[k] = v
+
+            self.log.info(
+                "initialize_slideshow: %d/%d files matched keywords=%s",
+                len(matched), len(self.tv_files), slideshow_keywords,
+            )
+            if not matched:
+                # Don't wipe the previous selection just because this filter
+                # returned zero — keeps the running slideshow alive while
+                # signalling the failure to the caller.
                 return {"status": "error", "error": "No valid slideshow files found"}
-            if not isinstance(req.slideshow_index, int):
-                return {"status": "error", "error": "Slideshow index must be an integer"}
-            self.slideshow_index = req.slideshow_index
-            if self.slideshow_index < 0 or self.slideshow_index >= len(self.slideshow_files):
+
+            self.slideshow_files = matched
+            if (
+                not isinstance(req.slideshow_index, int)
+                or req.slideshow_index < 0
+                or req.slideshow_index >= len(self.slideshow_files)
+            ):
                 self.slideshow_index = 0
+            else:
+                self.slideshow_index = req.slideshow_index
             return {"status": "success", "slideshow": self.slideshow_files, "index": self.slideshow_index}
 
         @self.app.post("/initialize_slideshow_files")
