@@ -40,6 +40,19 @@ class TheFrameApi:
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             raise TheFrameApiError(f"{method} {url}: {err}") from err
 
+    async def _post_checked(self, path: str, **kwargs: Any) -> dict:
+        """POST a slideshow command and surface non-success responses in the log.
+
+        The add-on uses HTTP 200 for everything and signals failure via
+        ``{"status": "error", "error": "..."}`` in the body. Without this
+        check the integration would silently treat every advance attempt as
+        successful even when the TV never moves.
+        """
+        result = await self._request("POST", path, **kwargs)
+        if result.get("status") != "success":
+            _LOGGER.warning("%s returned non-success: %s", path, result)
+        return result
+
     async def status(self) -> dict:
         return await self._request("GET", "/status")
 
@@ -71,8 +84,7 @@ class TheFrameApi:
     async def initialize_slideshow(
         self, keywords: list[str], index: int = 0
     ) -> dict:
-        return await self._request(
-            "POST",
+        return await self._post_checked(
             "/initialize_slideshow",
             json={"keyword_list": keywords, "slideshow_index": index},
         )
@@ -80,17 +92,16 @@ class TheFrameApi:
     async def initialize_slideshow_files(
         self, file_names: list[str], index: int = 0
     ) -> dict:
-        return await self._request(
-            "POST",
+        return await self._post_checked(
             "/initialize_slideshow_files",
             json={"file_names": file_names, "slideshow_index": index},
         )
 
     async def show_slideshow_next(self) -> dict:
-        return await self._request("POST", "/show_slideshow_next")
+        return await self._post_checked("/show_slideshow_next")
 
     async def show_slideshow_previous(self) -> dict:
-        return await self._request("POST", "/show_slideshow_previous")
+        return await self._post_checked("/show_slideshow_previous")
 
     def thumbnail_url(self, file_name: str, size: int = 320) -> str:
         return str(
