@@ -164,7 +164,7 @@ class TheFrameMediaSource(MediaSource):
             return self._browse_entry(entry_id, coordinator)
         if len(parts) >= 3 and parts[1] == "keyword":
             return self._browse_keyword(entry_id, coordinator, parts[2])
-        if len(parts) >= 3 and parts[1] == "all":
+        if len(parts) >= 2 and parts[1] == "all":
             return self._browse_all(entry_id, coordinator)
 
         raise Unresolvable(f"unknown path: {ident}")
