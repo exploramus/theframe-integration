@@ -9,12 +9,12 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from contextlib import asynccontextmanager
+import contextlib
 from pydantic import BaseModel
 import asyncio
 import os
 import json
 import logging
-import sys
 import io
 import time
 import datetime
@@ -30,7 +30,110 @@ except ImportError:
     pass
 
 
+from samsungframetv import ipcontrol
 from samsungframetv.async_art import SamsungTVAsyncArt
+
+# Add-on options; set THEFRAME_OPTIONS to run outside Home Assistant (e.g. a dev options file)
+OPTIONS_FILE = os.environ.get("THEFRAME_OPTIONS", "/data/options.json")
+
+POLL_INTERVAL = 10          # seconds between power state checks while the TV is on
+POLL_INTERVAL_MAX = 60      # back-off limit while the TV is off or in standby
+TV_CALL_TIMEOUT = 30        # outer safety net around TV calls, the library has its own timeouts
+TV_CHECK_TIMEOUT = 15       # power state check; the library's async REST calls have no timeout of their own
+TV_CONNECT_TIMEOUT = 10     # client timeout: sync REST call in the constructor and websocket open
+TV_ON_STATES = ('tv', 'art', 'on')
+
+
+class TVMonitor:
+    '''
+    background task that tracks the TV's power state with get_power_state()
+    endpoints read the cached state and never wait for the TV
+    '''
+
+    def __init__(self, mon, interval=POLL_INTERVAL, interval_max=POLL_INTERVAL_MAX):
+        self.log = logging.getLogger('Main.'+__class__.__name__)
+        self.mon = mon
+        self.interval = interval
+        self.interval_max = interval_max
+        self.state = 'unknown'      # off, standby, tv, art, on (art mode unknown), unknown before the first check
+        self.since = None
+        self.last_check = None
+        self.error = None
+        self.current_content_id = None
+        self._wakeup = asyncio.Event()
+
+    @property
+    def in_artmode(self):
+        return self.state == 'art'
+
+    @property
+    def tv_on(self):
+        return self.state in TV_ON_STATES
+
+    def poke(self):
+        '''
+        check again now, e.g. after a wake request
+        '''
+        self._wakeup.set()
+
+    async def run(self):
+        delay = self.interval
+        while True:
+            previous = self.state
+            await self.check()
+            if self.state in TV_ON_STATES or self.state != previous:
+                delay = self.interval
+            else:
+                delay = min(delay * 2, self.interval_max)
+            try:
+                await asyncio.wait_for(self._wakeup.wait(), delay)
+            except asyncio.TimeoutError:
+                pass
+            self._wakeup.clear()
+
+    async def check(self):
+        '''
+        one power state check; creates the TV client first if needed
+        '''
+        self.last_check = time.time()
+        if self.mon.tv is None:
+            try:
+                async with asyncio.timeout(TV_CALL_TIMEOUT):
+                    self.mon.tv = await asyncio.to_thread(self.mon.create_tv)
+            except Exception as e:
+                self.error = 'cannot create TV client: {}'.format(e)
+                self.log.warning(self.error)
+                self.set_state('off')
+                return
+        try:
+            async with asyncio.timeout(TV_CHECK_TIMEOUT):
+                state = await self.mon.tv.get_power_state(self.mon.paired_ip_control())
+            self.error = None
+        except TimeoutError:
+            self.error = 'TV did not answer within {}s'.format(TV_CHECK_TIMEOUT)
+            state = 'off'
+        except Exception as e:
+            self.error = 'power state check failed: {}'.format(e)
+            self.log.warning(self.error)
+            state = 'unknown'
+        self.set_state(state)
+        if self.in_artmode:
+            self.current_content_id = await self.mon.get_current_artwork()
+            if self.mon._sync_pending:
+                asyncio.create_task(self.mon._run_pending_sync())
+        else:
+            self.current_content_id = None
+
+    def set_state(self, state):
+        previous = self.state
+        if state == previous:
+            return
+        self.log.info('TV power state: {} -> {}'.format(previous, state))
+        self.state = state
+        self.since = time.time()
+        if state in TV_ON_STATES and previous not in TV_ON_STATES and self.mon.tv is not None:
+            # the TV just came back, forget art requests that timed out while it was off
+            self.mon.tv.reset_art_service()
 
 
 
@@ -172,11 +275,17 @@ class TheFrameController:
 
     allowed_ext = ['jpg', 'jpeg', 'png']
 
-    def __init__(self):
+    def __init__(self, options_file=OPTIONS_FILE):
         @asynccontextmanager
         async def lifespan(_: FastAPI):
-            asyncio.create_task(self._sync_watcher())
+            # the server answers at once; the monitor finds the TV in the background
+            task = asyncio.create_task(self.monitor.run()) if not self.config_error else None
             yield
+            if task:
+                task.cancel()
+            if self.tv is not None:
+                with contextlib.suppress(Exception):
+                    await self.tv.close()
 
         self.app = FastAPI(lifespan=lifespan)
         logging.basicConfig(level=logging.INFO)
@@ -186,37 +295,23 @@ class TheFrameController:
         self.slideshow_index = 0
         self._sync_pending = False
         self._sync_lock = asyncio.Lock()
-        # Load configuration from /data/options.json
+        self.tv = None
+        self.ip_control = None
+        self.config_error = None
         try:
-            with open("/data/options.json", "r") as config_file:
+            with open(options_file, "r") as config_file:
                 config = json.load(config_file)
         except Exception as e:
-            self.log.error(f"Failed to load configuration from /data/options.json: {e}")
-            sys.exit(1)
+            config = {}
+            self.config_error = f"Failed to load configuration from {options_file}: {e}"
         self.tv_ip = config.get("tv_ip")
-        if not self.tv_ip:
-            self.log.error("TV_IP is not set in /data/options.json.")
-            sys.exit(1)
+        if not self.tv_ip and not self.config_error:
+            self.config_error = f"tv_ip is not set in {options_file}"
+        if self.config_error:
+            self.log.error(self.config_error)
         self.tv_mac = config.get("tv_mac")
-        if self.tv_mac:
-            try:
-                send_magic_packet(self.tv_mac)
-                # Wait a bit for the TV to wake up
-                time.sleep(5)
-                send_magic_packet(self.tv_mac)
-                # Wait a bit for the TV to wake up
-                time.sleep(5)
-                send_magic_packet(self.tv_mac)
-                # Wait a bit for the TV to wake up
-                time.sleep(5)
-                send_magic_packet(self.tv_mac)
-                # Wait a bit for the TV to wake up
-                time.sleep(5)
-                self.log.info(f"Sent WOL packet to {self.tv_mac}")
-            except Exception as e:
-                self.log.error(f"Failed to send WOL packet: {e}")
-        else:
-            self.log.warning("No TV MAC address provided, WOL will not be sent.")
+        if not self.tv_mac:
+            self.log.warning("No TV MAC address provided, WOL is not available.")
         self.token_file = config.get("token_file")
         self.log.info(f"Using token file: {self.token_file}")
         self.json_path = config.get("json_path")
@@ -225,16 +320,35 @@ class TheFrameController:
         self.log.info(f"Using image folder: {self.folder}")
         self.matte = config.get("matte", "none")
         self.log.info(f"Using matte: {self.matte}")
+        if config.get("ip_control") and self.tv_ip:
+            token_file = config.get("ip_control_token_file") or os.path.join(
+                os.path.dirname(self.token_file or OPTIONS_FILE), "ipcontrol-token.txt")
+            self.ip_control = ipcontrol.SamsungTVAsyncIPControl(self.tv_ip, token_file=token_file)
+            self.log.info("IP Control enabled, token file: {}, paired: {}".format(token_file, bool(self.ip_control.token)))
         self.start = time.time()
-        self.current_content_id = None
         self.pil = PIL_methods(self)
         self.port=8002
-        try:
-            self.tv = SamsungTVAsyncArt(host=self.tv_ip, port=self.port, token_file=self.token_file)
-        except Exception:
-            logging.error("Failed to connect to TV. Please check the IP address and token file.")
-            sys.exit(1)
+        self.monitor = TVMonitor(self)
         self.setup_routes()
+
+    def paired_ip_control(self):
+        return self.ip_control if self.ip_control is not None and self.ip_control.token else None
+
+    def create_tv(self):
+        '''
+        create the TV client; blocking (REST call and possibly a websocket open), run in a worker thread
+        '''
+        return SamsungTVAsyncArt(host=self.tv_ip, port=self.port, token_file=self.token_file, timeout=TV_CONNECT_TIMEOUT)
+
+    def art_mode_error(self):
+        '''
+        error response for commands that need art mode, or None if the TV is in art mode
+        '''
+        if self.config_error:
+            return {"status": "error", "error": self.config_error}
+        if not self.monitor.in_artmode:
+            return {"status": "error", "error": "TV is not in art mode"}
+        return None
 
     class ShowImageRequest(BaseModel):
         content_id: str
@@ -300,7 +414,9 @@ class TheFrameController:
 
     async def select_image(self, content_id):
         try:
-            await self.tv.select_image(content_id)
+            async with asyncio.timeout(TV_CALL_TIMEOUT):
+                await self.tv.select_image(content_id)
+            self.monitor.current_content_id = content_id
             return content_id
         except Exception as e:
             self.log.warning("Failed to select image for content_id {}: {}".format(content_id, e))
@@ -328,7 +444,8 @@ class TheFrameController:
         reads currently displayed art content_id from tv
         '''
         try:
-            content_id = (await self.tv.get_current()).get('content_id')
+            async with asyncio.timeout(TV_CALL_TIMEOUT):
+                content_id = (await self.tv.get_current()).get('content_id')
         except Exception:
             content_id = None
         return content_id
@@ -545,7 +662,7 @@ class TheFrameController:
         sets _sync_pending if TV is not ready so the sync runs automatically when it is.
         '''
         try:
-            if await self.tv.in_artmode():
+            if self.monitor.in_artmode:
                 self.log.info('checking directory: {}'.format(self.folder))
                 await self._do_sync()
                 self._sync_pending = False
@@ -566,27 +683,20 @@ class TheFrameController:
             if not self._sync_pending:
                 return
             try:
-                if await self.tv.in_artmode():
+                if self.monitor.in_artmode:
                     self.log.info('running deferred sync')
                     await self._do_sync()
                     self._sync_pending = False
             except Exception as e:
                 self.log.warning("deferred sync failed: {}".format(e))
 
-    async def _sync_watcher(self):
-        '''
-        background task: retries a pending sync every 60 s until the TV is ready.
-        '''
-        while True:
-            await asyncio.sleep(60)
-            if self._sync_pending:
-                await self._run_pending_sync()
-
 
     def setup_routes(self):
 
         @self.app.post("/sync_files")
         async def sync_files():
+            if self.config_error:
+                return {"status": "error", "error": self.config_error}
             async with self._sync_lock:
                 try:
                     await self.scan_and_sync_dir()
@@ -600,6 +710,9 @@ class TheFrameController:
         async def reconcile_files():
             if not HAVE_PIL:
                 return {"status": "error", "error": "PIL is not installed"}
+            error = self.art_mode_error()
+            if error:
+                return error
             try:
                 await self.get_api_version()
                 await self.pil.initialize()
@@ -617,8 +730,9 @@ class TheFrameController:
 
         @self.app.post("/show_image")
         async def show_image(req: self.ShowImageRequest):
-            if not await self.tv.in_artmode():
-                return {"status": "error", "error": "TV is not in art mode"}
+            error = self.art_mode_error()
+            if error:
+                return error
             if self._sync_pending:
                 asyncio.create_task(self._run_pending_sync())
             if not await self.select_image(req.content_id):
@@ -627,8 +741,9 @@ class TheFrameController:
 
         @self.app.post("/show_file")
         async def show_file(req: self.ShowFileRequest):
-            if not await self.tv.in_artmode():
-                return {"status": "error", "error": "TV is not in art mode"}
+            error = self.art_mode_error()
+            if error:
+                return error
             if self._sync_pending:
                 asyncio.create_task(self._run_pending_sync())
             content_id = await self.get_content_id(req.file_name)
@@ -741,8 +856,9 @@ class TheFrameController:
 
         @self.app.post("/show_slideshow_next")
         async def show_slideshow_next():
-            if not await self.tv.in_artmode():
-                return {"status": "error", "error": "TV is not in art mode"}
+            error = self.art_mode_error()
+            if error:
+                return error
             if self._sync_pending:
                 asyncio.create_task(self._run_pending_sync())
             if not self.slideshow_files:
@@ -761,8 +877,9 @@ class TheFrameController:
 
         @self.app.post("/show_slideshow_previous")
         async def show_slideshow_previous():
-            if not await self.tv.in_artmode():
-                return {"status": "error", "error": "TV is not in art mode"}
+            error = self.art_mode_error()
+            if error:
+                return error
             if self._sync_pending:
                 asyncio.create_task(self._run_pending_sync())
             if not self.slideshow_files:
@@ -781,8 +898,9 @@ class TheFrameController:
         
         @self.app.post("/show_slideshow_index")
         async def show_slideshow_index(req: self.SlideshowIndexRequest):
-            if not await self.tv.in_artmode():
-                return {"status": "error", "error": "TV is not in art mode"}
+            error = self.art_mode_error()
+            if error:
+                return error
             if self._sync_pending:
                 asyncio.create_task(self._run_pending_sync())
             if not self.slideshow_files:
@@ -822,8 +940,13 @@ class TheFrameController:
 
         @self.app.get("/get_artmode_settings")
         async def get_artmode_settings():
+            if self.config_error:
+                return {"status": "error", "error": self.config_error}
+            if not self.monitor.tv_on:
+                return {"status": "error", "error": "TV is not on"}
             try:
-                settings = await self.tv.get_artmode_settings('')
+                async with asyncio.timeout(TV_CALL_TIMEOUT):
+                    settings = await self.tv.get_artmode_settings('')
                 if not settings:
                     return {"status": "error", "error": "Failed to retrieve art mode settings"}
                 return {"status": "success", "settings": settings}
@@ -879,23 +1002,60 @@ class TheFrameController:
 
         @self.app.get("/status")
         async def status():
-            try:
-                in_artmode = await self.tv.in_artmode()
-            except Exception:
-                in_artmode = None
-            try:
-                current = await self.get_current_artwork()
-            except Exception:
-                current = None
+            # answered from the monitor's cache, never waits for the TV
+            if self.config_error:
+                return {"status": "error", "error": self.config_error}
             return {
                 "status": "success",
-                "in_artmode": in_artmode,
-                "current_content_id": current,
+                "in_artmode": None if self.monitor.state == 'unknown' else self.monitor.in_artmode,
+                "current_content_id": self.monitor.current_content_id,
                 "sync_pending": self._sync_pending,
                 "file_count": len(self.tv_files),
                 "slideshow_index": self.slideshow_index,
                 "slideshow_count": len(self.slideshow_files),
+                "power_state": self.monitor.state,
+                "power_state_since": self.monitor.since,
+                "last_check": self.monitor.last_check,
+                "art_service_available": self.tv.art_service_available if self.tv is not None else None,
+                "ip_control": "paired" if self.paired_ip_control() else ("unpaired" if self.ip_control else "disabled"),
+                "error": self.monitor.error,
             }
+
+        @self.app.post("/power_on")
+        async def power_on():
+            '''
+            wake the TV: IP Control if paired, else Wake-on-LAN (needs tv_mac and host network)
+            '''
+            if self.config_error:
+                return {"status": "error", "error": self.config_error}
+            try:
+                if self.paired_ip_control():
+                    method = "ip_control"
+                    async with asyncio.timeout(TV_CALL_TIMEOUT):
+                        await self.ip_control.async_call("power_on")
+                elif self.tv_mac:
+                    method = "wol"
+                    await asyncio.to_thread(send_magic_packet, self.tv_mac)
+                else:
+                    return {"status": "error", "error": "No way to wake the TV: pair IP Control or set tv_mac"}
+            except Exception as e:
+                return {"status": "error", "error": "power_on failed: {}".format(e)}
+            self.monitor.poke()
+            return {"status": "success", "method": method}
+
+        @self.app.post("/ip_control/pair")
+        async def ip_control_pair():
+            '''
+            one-time IP Control pairing; press Allow on the TV within 30 s
+            '''
+            if self.ip_control is None:
+                return {"status": "error", "error": "IP Control is disabled, set the ip_control option"}
+            try:
+                await self.ip_control.async_pair()
+            except Exception as e:
+                return {"status": "error", "error": "pairing failed: {}".format(e)}
+            self.monitor.poke()
+            return {"status": "success"}
 
 # Instantiate the controller
 controller = TheFrameController()

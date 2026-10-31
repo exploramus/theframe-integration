@@ -10,11 +10,40 @@ Key controls such as the interval between images, the keywords to select images,
 
 ## How it works
 
+### TV connection and power state
+
+The add-on starts and answers requests immediately, whether or not the TV is reachable; it never wakes the TV on its own. A background monitor checks the TV's power state every 10 seconds while it is on, and backs off up to 60 seconds while it is off or in standby. `/status` reports the cached result, so it never waits for the TV:
+
+| Field | Meaning |
+| --- | --- |
+| `power_state` | `off`, `standby`, `tv`, `art`, `on` (on, art mode unknown) or `unknown` before the first check |
+| `in_artmode` | `true` in art mode, `null` before the first check |
+| `current_content_id` | Artwork shown in art mode |
+| `art_service_available` | `false` while the TV's art service stopped answering and requests are paused (30 s, doubling up to 240 s) |
+| `ip_control` | `disabled`, `unpaired` or `paired` |
+| `error` | Last problem reaching the TV, if any |
+
+Commands that need art mode (`/show_image`, `/show_file`, `/show_slideshow_*`, `/reconcile_files`) return `{"status": "error", "error": "TV is not in art mode"}` at once when the TV is not in art mode.
+
+**Waking the TV:** `POST /power_on` uses Samsung IP Control if it is paired, otherwise Wake-on-LAN to `tv_mac`. The add-on runs on the host network so Wake-on-LAN broadcasts reach the TV.
+
+**IP Control (optional):** the most reliable source for the power state and for switching the TV on. Set `ip_control: true`, restart the add-on, then call `POST /ip_control/pair` and press Allow on the TV within 30 seconds. The pairing token is stored next to `token_file` (`ipcontrol-token.txt`) unless `ip_control_token_file` is set.
+
+### Running outside Home Assistant
+
+For development the add-on reads its options from the file named in `THEFRAME_OPTIONS` (default `/data/options.json`):
+
+```
+THEFRAME_OPTIONS=dev-options.json uvicorn theframe:app --app-dir theframe_controller/app --port 5000
+```
+
+Use a separate token file, image folder and `json_path` for this: a sync deletes every TV upload recorded in `json_path` whose file is missing from `image_path`.
+
 ### File synchronisation
 
 Calling `/sync_files` compares the images in the configured folder against what is uploaded on the TV and reconciles the difference — uploading new files, removing deleted ones, and re-uploading modified ones. This operation requires the TV to be on and in Art Mode.
 
-If the TV is off or not in Art Mode when `/sync_files` is called, the sync is queued rather than dropped. The response will be `{"status": "queued"}` instead of `{"status": "success"}`. Any Home Assistant automation that checks this status should handle both values. The queued sync runs automatically within 60 seconds once the TV enters Art Mode — no further action is needed.
+If the TV is off or not in Art Mode when `/sync_files` is called, the sync is queued rather than dropped. The response will be `{"status": "queued"}` instead of `{"status": "success"}`. Any Home Assistant automation that checks this status should handle both values. The queued sync runs automatically as soon as the monitor sees the TV in Art Mode (within about 10 seconds) — no further action is needed.
 
 ### Image sync from OneDrive
 
