@@ -5,11 +5,11 @@ Replaces the manual `configuration.yaml` / `automations.yaml` setup with native 
 
 ## Status
 
-First iteration — Variant A (hybrid). The integration talks to the add-on over HTTP; the add-on still does the heavy lifting (TV connection, sync, slideshow logic).
+The add-on is the engine: TV connection, sync, slideshow state and timer. The integration is a thin adapter over the add-on's `/api/v1`: it receives status changes over the add-on's event stream (polling every 60 s as fallback) and its switches and number only change the add-on's state, which survives restarts of either side.
 
 ## Requirements
 
-- `theframe-controller` add-on **v1.0.16+** (adds `/list_files`, `/thumbnail/{file_name}`, `/status`)
+- `theframe-controller` add-on **1.3.0+** (`/api/v1`); add-on and integration are released together with the same version
 - Home Assistant 2024.x or newer
 
 ## Repository layout
@@ -18,7 +18,7 @@ This repository holds both parts, released together under one version (tag `vX.Y
 
 - `custom_components/theframe/` — the integration (HACS)
 - `theframe_controller/` — the add-on (Home Assistant add-on repository, prebuilt images on GHCR)
-- `tests/`, `.github/workflows/` — tests and CI
+- `tests/` — add-on, contract and API client tests; `tests_ha/` — Home Assistant tests for the integration; `.github/workflows/` — CI
 
 ## Installation
 
@@ -30,7 +30,7 @@ This repository holds both parts, released together under one version (tag `vX.Y
 
 | Entity / feature | Replaces in DOCS.md |
 | --- | --- |
-| `switch.the_frame_slideshow` | `input_boolean.the_frame_show` + the `time_pattern` slideshow automation |
+| `switch.the_frame_slideshow` — turns the add-on's slideshow timer on and off | `input_boolean.the_frame_show` + the `time_pattern` slideshow automation |
 | `switch.the_frame_art_<keyword>` (one per keyword, generated dynamically; German umlauts are transliterated so `Blüte` becomes `bluete` instead of `blute`) | All `template:` switches |
 | `number.the_frame_slideshow_interval` | `input_number.theframe_interval` + HomeKit-bridge automations |
 | `button.the_frame_sync_files` | `rest_command.sync_files` + `shell_command.image_sync` |
@@ -38,6 +38,7 @@ This repository holds both parts, released together under one version (tag `vX.Y
 | `sensor.the_frame_current_image` (with file_name + keywords as attributes) | n/a — new |
 | `sensor.the_frame_image_count`, `sensor.the_frame_slideshow_position` | n/a — new |
 | `binary_sensor.the_frame_in_art_mode`, `binary_sensor.the_frame_sync_pending` | n/a — new |
+| `sensor.the_frame_sync` — sync job state (`idle`, `queued` until art mode, `running`, `done`) with progress attributes | n/a — new |
 | `image.the_frame_current_image` (live thumbnail of what's on the TV) | n/a — new |
 | `media_player.the_frame_player` — accepts Play actions from the media browser, mapped to `show_file` | n/a — new |
 | Services `theframe.show_file`, `show_image`, `sync_files`, `next`, `previous` | `rest_command.*` |
@@ -45,7 +46,7 @@ This repository holds both parts, released together under one version (tag `vX.Y
 
 > **Note on "Play" in the media browser:** The Frame's art mode is *not* a DLNA renderer — pushing an image to the TV via DLNA does not land in art mode. Pick **The Frame Player** as the target instead; it routes the selection to the `show_file` endpoint and the image appears in art mode within a second.
 
-The keyword switches appear automatically as soon as the add-on reports new keywords through `/available_keywords`. No more handwritten `template: - switch:` blocks per keyword.
+The keyword switches appear automatically as soon as the add-on reports new keywords. Turning one on switches the slideshow to keyword mode (replacing a playlist from `theframe.play_files`). No more handwritten `template: - switch:` blocks per keyword.
 
 ## Image browser
 

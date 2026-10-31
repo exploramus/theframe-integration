@@ -11,9 +11,7 @@ CONF_IGNORE_KEYWORDS = "ignore_keywords"
 
 UPDATE_INTERVAL_SECONDS = 60
 
-# Slideshow advance is driven from inside the integration so the user no
-# longer needs the time_pattern automation from DOCS.md.
-DEFAULT_SLIDESHOW_INTERVAL_MIN = 2
+# Slideshow interval bounds for the number entity; the add-on runs the timer.
 MIN_SLIDESHOW_INTERVAL_MIN = 1
 MAX_SLIDESHOW_INTERVAL_MIN = 30
 

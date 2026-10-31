@@ -44,10 +44,12 @@ class SyncButton(_Base):
 
     async def async_press(self) -> None:
         try:
-            await self.coordinator.api.sync_files()
+            await self.coordinator.api.sync()
         except TheFrameApiError as err:
-            _LOGGER.error("sync_files failed: %s", err)
-        await self.coordinator.async_request_refresh()
+            if err.code == "job_conflict":
+                _LOGGER.info("A sync is already queued or running")
+            else:
+                _LOGGER.error("sync failed: %s", err)
 
 
 class NextButton(_Base):
@@ -60,7 +62,7 @@ class NextButton(_Base):
 
     async def async_press(self) -> None:
         try:
-            await self.coordinator.api.show_slideshow_next()
+            await self.coordinator.api.slideshow_next()
         except TheFrameApiError as err:
             _LOGGER.error("next failed: %s", err)
 
@@ -75,6 +77,6 @@ class PreviousButton(_Base):
 
     async def async_press(self) -> None:
         try:
-            await self.coordinator.api.show_slideshow_previous()
+            await self.coordinator.api.slideshow_previous()
         except TheFrameApiError as err:
             _LOGGER.error("previous failed: %s", err)
