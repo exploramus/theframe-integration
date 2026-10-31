@@ -167,6 +167,10 @@ Key test scenarios: add-on starts with TV off and answers immediately; queued sy
    - Options file from `THEFRAME_OPTIONS` (default `/data/options.json`) for running on the Mac.
    - Tests: `tests/test_addon_monitor.py` with a minimal fake TV (startup without TV, off→art transition, fail-fast, config error, hanging power check). The full fake TV is step 3.
    - Checked against the real TV (read-only, dev options, IP Control paired): first check `art`, `/status` ~10 ms. Unreachable TV: server answers at once, `off` after ~25 s. Not checked: off/standby transitions with the real TV, `/power_on`, sync and display commands, Supervisor install with `host_network`.
-3. Fake TV and the state-based tests (using the library's fixtures as reference).
+3. Fake TV and the state-based tests (using the library's fixtures as reference). *Done on branch `step3/fake-tv`, details below.*
+
+   - `tests/fake_tv.py`: fake `SamsungTVAsyncArt` with the calls the add-on makes. Response shapes come from our own TV's diagnose run (`tests/fixtures/frame_2022.json`, redacted) instead of the library's 2018 recordings. Knobs: power state, latency, connection drop on the n-th upload, leaving art mode after the n-th upload, unconfirmed uploads.
+   - `tests/test_addon_scenarios.py`: TV off/standby/watching TV, queued sync runs in art mode, slow TV, connection drop mid-upload, art mode left during sync, unconfirmed upload, deletes only own uploads, modified file re-uploaded. The two step-4 scenarios (slideshow survives a re-upload, survives a restart) are strict `xfail`s and will flag when step 4 makes them pass.
+   - Fixed in the add-on (1.2.0, unreleased): failed or interrupted syncs stay queued and are retried (failures after 60 s); unconfirmed uploads are looked up in My Photos (exactly one new image) instead of being uploaded again.
 4. Job model, persisted state, event stream, versioned API; integration adapted to it.
 5. Later: OneDrive sync via Microsoft Graph (OAuth) in the add-on; playlist editor via Ingress; new entities from the art settings API.

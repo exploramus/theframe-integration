@@ -42,6 +42,7 @@ TV_CALL_TIMEOUT = 30        # outer safety net around TV calls, the library has 
 TV_CHECK_TIMEOUT = 15       # power state check; the library's async REST calls have no timeout of their own
 TV_CONNECT_TIMEOUT = 10     # client timeout: sync REST call in the constructor and websocket open
 TV_ON_STATES = ('tv', 'art', 'on')
+SYNC_RETRY_DELAY = 60       # seconds before a failed sync is retried
 
 
 class TVMonitor:
@@ -294,6 +295,7 @@ class TheFrameController:
         self.slideshow_files = {}
         self.slideshow_index = 0
         self._sync_pending = False
+        self._sync_retry_after = 0
         self._sync_lock = asyncio.Lock()
         self.tv = None
         self.ip_control = None
@@ -577,19 +579,47 @@ class TheFrameController:
     async def upload_files(self, filenames):
         '''
         upload files in list to tv
+        an upload the tv did not confirm may still have been added, so look for it in My Photos
+        instead of uploading it again on the next sync
         '''
+        known = None
         for filename in filenames:
             path = os.path.join(self.folder, filename)
             file_data, file_type, exif_tags = self.read_file(path)
             if file_data and self.tv.art_mode:
+                if known is None:
+                    known = set(await self.get_tv_content('MY-C0002') or [])
                 self.log.info('uploading : {} to tv'.format(filename))
-                self.update_uploaded_files(filename, await self.tv.upload(file_data, file_type=file_type, matte=self.matte, portrait_matte=self.matte), exif_tags)
+                content_id = await self.tv.upload(file_data, file_type=file_type, matte=self.matte, portrait_matte=self.matte)
+                if not content_id:
+                    content_id = await self.find_unconfirmed_upload(known)
+                if content_id:
+                    known.add(content_id)
+                self.update_uploaded_files(filename, content_id, exif_tags)
                 if self.tv_files.get(filename, {}).get('content_id'):
                     self.log.info('uploaded : {} to tv as {}'.format(filename, self.tv_files[filename]['content_id']))
                 else:
                     self.log.warning('file: {} failed to upload'.format(filename))
                 self.write_program_data()
             
+    async def find_unconfirmed_upload(self, known):
+        '''
+        content_id of an upload the tv added without confirming, if exactly one new image appeared
+        known: content_ids in My Photos before the upload, updated with what is there now
+        '''
+        my_photos = await self.get_tv_content('MY-C0002')
+        if my_photos is None:
+            return None
+        new = set(my_photos) - known
+        known.update(my_photos)
+        if len(new) == 1:
+            content_id = new.pop()
+            self.log.info('upload was not confirmed, found it on the tv as {}'.format(content_id))
+            return content_id
+        if new:
+            self.log.warning('upload was not confirmed and {} new images are on the tv, cannot tell which is ours'.format(len(new)))
+        return None
+
     async def delete_files_from_tv(self, content_ids):
         '''
         remove files from tv if tv is in art mode
@@ -650,11 +680,23 @@ class TheFrameController:
         await asyncio.sleep(min(10, 5 * len(files)))
         
     async def _do_sync(self):
+        '''
+        returns False if the tv left art mode during the sync, so some files were skipped
+        '''
         files = self.get_folder_files()
         await self.sync_file_list()
         await self.remove_files(files)
         await self.add_files(files)
         await self.update_files(files)
+        if self.tv.art_mode is False:
+            self.log.info('tv left art mode during sync, queuing the rest')
+            return False
+        return True
+
+    def _sync_failed(self, e):
+        self.log.warning('sync failed, retrying in art mode after {}s: {}'.format(SYNC_RETRY_DELAY, e))
+        self._sync_pending = True
+        self._sync_retry_after = time.monotonic() + SYNC_RETRY_DELAY
 
     async def scan_and_sync_dir(self):
         '''
@@ -664,20 +706,19 @@ class TheFrameController:
         try:
             if self.monitor.in_artmode:
                 self.log.info('checking directory: {}'.format(self.folder))
-                await self._do_sync()
-                self._sync_pending = False
+                self._sync_pending = not await self._do_sync()
             else:
                 self.log.info('artmode or tv is off, queuing sync')
                 self._sync_pending = True
         except Exception as e:
-            self.log.warning("error in scan_and_sync_dir: {}".format(e))
+            self._sync_failed(e)
 
     async def _run_pending_sync(self):
         '''
         run a deferred sync if one is pending; no-op if already running or cleared.
         uses double-checked locking to prevent redundant syncs.
         '''
-        if not self._sync_pending:
+        if not self._sync_pending or time.monotonic() < self._sync_retry_after:
             return
         async with self._sync_lock:
             if not self._sync_pending:
@@ -685,10 +726,9 @@ class TheFrameController:
             try:
                 if self.monitor.in_artmode:
                     self.log.info('running deferred sync')
-                    await self._do_sync()
-                    self._sync_pending = False
+                    self._sync_pending = not await self._do_sync()
             except Exception as e:
-                self.log.warning("deferred sync failed: {}".format(e))
+                self._sync_failed(e)
 
 
     def setup_routes(self):
@@ -701,7 +741,7 @@ class TheFrameController:
                 try:
                     await self.scan_and_sync_dir()
                     if self._sync_pending:
-                        return {"status": "queued", "message": "TV not in art mode, sync queued"}
+                        return {"status": "queued", "message": "sync queued, it runs when the TV is in art mode"}
                     return {"status": "success", "files": self.tv_files}
                 except Exception as e:
                     return {"status": "error", "error": str(e)}
