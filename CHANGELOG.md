@@ -13,3 +13,4 @@
 1.0.16 New endpoints /list_files, /thumbnail/{file_name}, /status for the companion HA integration
 1.0.17 New endpoint /initialize_slideshow_files for ordered, file-based playlists (curated slideshows)
 1.0.17.001 Fix /initialize_slideshow keyword matching: switched from substring-on-JSON-string to proper list membership so escaped Unicode keywords (e.g. "Blüte") match again. Also keeps the previously loaded slideshow_files when a filter returns zero matches.
+1.0.17.002 Hotfix: depend on samsungframetv==4.1.4 from PyPI instead of the samsung-tv-ws-api git head (renamed package since 4.0.0, broke rebuilds); imports changed from samsungtvws to samsungframetv. No functional changes.

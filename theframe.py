@@ -2,7 +2,7 @@
 #
 # This code provides an API to manage and display images on a Samsung The Frame TV.
 # It includes functionality to upload images, display slideshows, and manage TV settings.
-# It uses FastAPI for the web interface and samsungtvws for communication with the TV.
+# It uses FastAPI for the web interface and samsungframetv for communication with the TV.
 # It also includes PIL for image processing if available.
 # This code is designed to run in a Home Assistant environment, where it can be used as an add-on.
 
@@ -32,8 +32,8 @@ except ImportError:
     pass
 
 
-from samsungtvws.async_art import SamsungTVAsyncArt
-from samsungtvws import __version__
+from samsungframetv.async_art import SamsungTVAsyncArt
+from samsungframetv import __version__
 
 
 

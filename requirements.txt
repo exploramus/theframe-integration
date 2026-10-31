@@ -2,5 +2,5 @@ fastapi[standard]
 pillow
 pydantic
 wakeonlan
-samsungtvws @ git+https://github.com/NickWaterton/samsung-tv-ws-api
+samsungframetv==4.1.4
 iptcinfo3 @ git+https://github.com/james-see/iptcinfo3
