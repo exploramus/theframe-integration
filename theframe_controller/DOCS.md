@@ -29,6 +29,29 @@ Commands that need art mode (`/show_image`, `/show_file`, `/show_slideshow_*`, `
 
 **IP Control (optional):** the most reliable source for the power state and for switching the TV on. Set `ip_control: true`, restart the add-on, then call `POST /ip_control/pair` and press Allow on the TV within 30 seconds. The pairing token is stored next to `token_file` (`ipcontrol-token.txt`) unless `ip_control_token_file` is set.
 
+### API
+
+The companion integration uses the versioned API under `/api/v1`; the full contract is the add-on's OpenAPI document at `/openapi.json` (interactive at `/docs`).
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/v1/status` | Power state, current image, slideshow, current sync job |
+| `GET /api/v1/events` | Server-sent events: `status` (whole status, on connect and whenever it changes), `files` (after a sync) |
+| `GET /api/v1/files`, `GET /api/v1/keywords` | Uploaded files with keywords; all keywords |
+| `POST /api/v1/sync` | Start a sync job: `202` with the job; it waits as `queued` until the TV is in Art Mode; `409` while one is queued or running |
+| `POST /api/v1/show` | Show `{"file_name": ...}` or `{"content_id": ...}` |
+| `GET` / `PUT /api/v1/slideshow` | Slideshow settings: `enabled`, `interval_minutes`, `mode` (`keywords` or `files`), `keywords`, `files`, `position` |
+| `POST /api/v1/slideshow/next`, `/previous`, `/show` | Step through the slideshow, or show `{"position": n}` |
+| `GET /api/v1/settings` | The TV's art mode settings |
+| `POST /api/v1/power_on`, `POST /api/v1/ip_control/pair` | Wake the TV; pair IP Control |
+| `GET /api/v1/thumbnail/{file}` | JPEG thumbnail of an image file |
+
+Errors use HTTP status codes and a body `{"error": {"code": ..., "message": ...}}`. Codes: `not_configured` (503), `tv_not_in_art_mode`, `tv_not_on`, `job_conflict`, `empty_slideshow`, `wake_unavailable`, `ip_control_disabled` (409), `not_found` (404), `invalid_request` (422), `tv_error` (502).
+
+**Slideshow:** the add-on owns the slideshow and its timer. The settings are saved in `/data/state.json` and survive restarts. The slideshow stores file names and looks up the TV's content ID when it shows an image, so re-uploading a modified file does not break it. The timer pauses outside Art Mode and while a sync is running.
+
+**Older endpoints** (`/status`, `/sync_files`, `/show_file`, `/initialize_slideshow`, `/show_slideshow_next`, ...) still work and use the same state, but are deprecated and will be removed in a later release. `/sync_files` still waits for the sync to finish.
+
 ### Running outside Home Assistant
 
 For development the add-on reads its options from the file named in `THEFRAME_OPTIONS` (default `/data/options.json`):
