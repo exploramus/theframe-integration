@@ -1,6 +1,6 @@
 # The Frame Controller — Home Assistant Integration
 
-Companion integration for the [theframe-controller](https://github.com/tilo-boehmann/theframe-controller) add-on.
+Companion integration for the [theframe-controller](theframe_controller/) add-on (in this repository).
 Replaces the manual `configuration.yaml` / `automations.yaml` setup with native Home Assistant entities, services, and a media source for image browsing.
 
 ## Status
@@ -12,9 +12,19 @@ First iteration — Variant A (hybrid). The integration talks to the add-on over
 - `theframe-controller` add-on **v1.0.16+** (adds `/list_files`, `/thumbnail/{file_name}`, `/status`)
 - Home Assistant 2024.x or newer
 
+## Repository layout
+
+This repository holds both parts, released together under one version (tag `vX.Y.Z`):
+
+- `custom_components/theframe/` — the integration (HACS)
+- `theframe_controller/` — the add-on (Home Assistant add-on repository, prebuilt images on GHCR)
+- `tests/`, `.github/workflows/` — tests and CI
+
 ## Installation
 
-Copy `custom_components/theframe/` into your Home Assistant `<config>/custom_components/` directory and restart Home Assistant. Then add the integration via **Settings → Devices & Services → Add Integration → "The Frame Controller"** and enter the add-on URL (default `http://homeassistant.local:5000`).
+**Add-on:** in Home Assistant go to **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, add `https://github.com/exploramus/theframe-integration`, then install **The Frame Controller**. If you used the old `exploramus/theframe-controller` repository, uninstall the old add-on first and re-enter its options; tokens and `uploaded_files.json` live in `/media` and are kept.
+
+**Integration:** add this repository to HACS as a custom repository (category *Integration*), or copy `custom_components/theframe/` into your Home Assistant `<config>/custom_components/` directory and restart Home Assistant. Then add the integration via **Settings → Devices & Services → Add Integration → "The Frame Controller"** and enter the add-on URL (default `http://homeassistant.local:5000`).
 
 ## What you get
 
@@ -130,3 +140,7 @@ See [MIGRATION.md](MIGRATION.md) for a step-by-step guide that removes the DOCS.
 After migration, all entities from DOCS.md can be removed. The HomeKit bridge configuration stays — it now exports the new `switch.*` and `number.*` entities directly.
 
 The OneDrive sync via `rclone` still lives in the add-on (`image_sync.sh`). The integration's *Sync Files* button only triggers `/sync_files` (TV ↔ local folder reconciliation). If you want the rclone step to run from HA, keep the `shell_command: image_sync` line, or wrap it with a script.
+
+## License
+
+GPL-3.0, see [LICENSE](LICENSE). The add-on depends on [samsungframetv](https://pypi.org/project/samsungframetv/) (LGPL-3.0).

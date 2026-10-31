@@ -62,6 +62,28 @@ Checked against version 4.1.4 (released 2026-10-26; 4.0.0 on 2026-10-25).
 - The `SamsungTVAsyncArt` constructor does blocking network I/O: a synchronous REST call for the model year and, on 2024+ models without a token, a synchronous websocket open. Create the client in a worker thread inside the monitor, never at import time or directly on the event loop.
 - WOL stays as fallback (needs `host_network: true`); IP Control `power_on()` is preferred where it works.
 
+**Diagnose results for this TV** (`python -m samsungframetv.diagnose <tv-ip> --ipcontrol`, samsungframetv 4.1.4, 2026-10-31, read-only run, TV on in TV mode, not art mode):
+
+| Item | Result |
+|---|---|
+| Model | GQ55LS03BGUXZG, `22_PONTUSM_FTV` → model year 2022; Tizen, wired, 3840×2160 |
+| Art API | 4.3.4.0 (new API, `legacy_art_api` false) |
+| REST | `PowerState` reported (`on`); `TokenAuthSupport` true |
+| Power state | `get_power_state()` → `tv`; `get_artmode` → `off`; `in_artmode()` → false |
+| Art channel | All art requests answered, typically 0.01–0.2 s; thumbnail 1.5 s (JPEG, ~25 KB) |
+| Content | 373 items: `MY-C0008` 185, `MY-C0002` 183, `MY-C0004` 5 |
+| Device features | brightness sensor, motion sensor, colour tone: yes; My Shelf: no |
+| Art settings | brightness 4 (0–10), colour temperature 0 (−5…5), motion sensitivity 2 (1–3), motion timer 15 (off/5/15/30/60/120/240), brightness sensor on |
+| Mattes / filters | 10 matte types (none … squares) with colours; 7 photo filters (None, Aqua, ArtDeco, Ink, Wash, Pastel, Feuve) |
+| TV-native slideshow | off |
+| IP Control (1516) | Port open; pairing works after pressing Allow on the TV (token stored); `get_tv_states` answers in 0.5 s |
+
+Notes:
+- The websocket connection is refused (`ms.channel.timeOut`) until Allow is pressed on the TV; the first run failed this way. No websocket token file was written after Allow, so this 2022 model appears to remember the client by name. The add-on's existing token file still works; re-check when a dev client name is used.
+- IP Control pairing needs someone at the TV as well; without Allow the pairing request times out silently.
+- Not tested (would change TV state): IP Control `power_on()` / `power_off()` / `set_artmode()`, WOL, `upload()`, and power-state behaviour in standby and art mode. Test these in step 2.
+- Full redacted report: `diagnose_report_ipc.json` (not committed).
+
 ### 3.1 TV monitor (add-on starts independently of the TV)
 - Server starts immediately and always answers.
 - Background task tracks TV state with `get_power_state()`: `off` → `standby` → `tv` → `art`; polls with back-off while the TV is off, respects the library's art-service back-off, calls `reset_art_service()` when the TV comes back.
@@ -126,8 +148,17 @@ Key test scenarios: add-on starts with TV off and answers immediately; queued sy
 
 ## 6. Implementation order
 
-0. **Hotfix release of the current add-on** (before anything else): `samsungframetv==4.1.4` from PyPI, imports changed to `samsungframetv`, otherwise unchanged. Test once against the real TV, release, install on the Pi. Run the library's `diagnose` tool once against the TV and record the results.
-1. Monorepo layout and CI.
+0. **Hotfix release of the current add-on** (before anything else): `samsungframetv==4.1.4` from PyPI, imports changed to `samsungframetv`, otherwise unchanged. Test once against the real TV, release, install on the Pi. Run the library's `diagnose` tool once against the TV and record the results. *Code change done (add-on 1.0.17.002, not yet released); diagnose done 2026-10-31, results in 3.0.*
+1. Monorepo layout and CI. *Done on branch `step1/monorepo` (not yet pushed), details below.*
+
+   - Monorepo is `exploramus/theframe-integration`; the add-on was imported with its history (`git subtree`) into `theframe_controller/`, code in `theframe_controller/app/`. `exploramus/theframe-controller` is to be archived after the first release from here.
+   - Shared version **1.1.0** in `manifest.json` and add-on `config.yaml`; `tests/test_versions.py` checks they match each other, the add-on changelog and, on release, the tag.
+   - Add-on installs as a prebuilt image `ghcr.io/exploramus/theframe-controller-{arch}`, arches aarch64 and amd64 (armv7 dropped).
+   - CI (`.github/workflows/ci.yaml`): ruff (baseline rules E4/E7/E9/F), pytest, hassfest, HACS validation (brands ignored), add-on linter, image build for both arches. Release (`release.yaml`, on tag `v*`): version check, push images to GHCR with `io.hass.*` labels, GitHub release.
+   - Fixed along the way: hassfest errors (manifest key order, URL in config-flow strings), `__pycache__` untracked, five unused imports, `tilo-boehmann` links.
+   - Checked locally: ruff, pytest, actionlint, hassfest, Docker build and import smoke test for both arches. Not checked locally: HACS validation and the add-on linter (need GitHub), Supervisor install from the new repository (HAOS VM or Pi, after the first release).
+   - Repository made public on 2026-10-31 (needed by HACS, the Supervisor add-on store and anonymous GHCR pulls); description and topics set for HACS. History checked before: no secrets. The TV's LAN IP and MAC were removed from the add-on defaults and this doc; `tv_ip` must now be entered at install, `tv_mac` is optional (WOL is skipped without it).
+   - Deferred: mypy for the integration (needs Home Assistant installed; add with pytest-homeassistant-custom-component in step 3).
 2. Add-on refactor on `samsungframetv` 4.1.x: TV monitor based on `get_power_state()`, client created off the event loop, library timeouts and back-off, start without the TV, `host_network: true`, config via env; optional IP Control.
 3. Fake TV and the state-based tests (using the library's fixtures as reference).
 4. Job model, persisted state, event stream, versioned API; integration adapted to it.

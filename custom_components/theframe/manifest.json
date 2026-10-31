@@ -1,13 +1,18 @@
 {
   "domain": "theframe",
   "name": "The Frame Controller",
-  "version": "0.1.0",
-  "documentation": "https://github.com/tilo-boehmann/theframe-integration",
-  "issue_tracker": "https://github.com/tilo-boehmann/theframe-integration/issues",
-  "codeowners": ["@tilo-boehmann"],
+  "codeowners": [
+    "@exploramus"
+  ],
   "config_flow": true,
-  "iot_class": "local_polling",
+  "dependencies": [
+    "http",
+    "media_source"
+  ],
+  "documentation": "https://github.com/exploramus/theframe-integration",
   "integration_type": "device",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/exploramus/theframe-integration/issues",
   "requirements": [],
-  "dependencies": ["http", "media_source"]
+  "version": "1.1.0"
 }

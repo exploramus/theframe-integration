@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "The Frame Controller",
-        "description": "Adresse des laufenden theframe-controller-Add-ons. Von Home Assistant aus ist das Add-on üblicherweise unter http://homeassistant.local:5000 erreichbar.",
+        "description": "Adresse des laufenden theframe-controller-Add-ons. Von Home Assistant aus ist das Add-on üblicherweise unter {default_url} erreichbar.",
         "data": {
           "base_url": "Add-on URL"
         }
