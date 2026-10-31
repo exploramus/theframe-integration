@@ -11,8 +11,6 @@ arch:
 startup: "services"
 options:
   token_file: "/media/TheFrame/tv-token.txt"
-  tv_ip: "192.168.178.94"
-  tv_mac: "BC:45:5B:3F:55:C5"
   json_path: "/media/TheFrame/uploaded_files.json"
   image_path: "/media/TheFrameImages/"
   matte: "none"
@@ -21,7 +19,7 @@ options:
 schema:
   token_file: str
   tv_ip: str
-  tv_mac: str
+  tv_mac: "str?"
   json_path: str
   image_path: str
   matte: str
