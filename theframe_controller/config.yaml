@@ -9,7 +9,6 @@ arch:
   - aarch64
   - amd64
 startup: "services"
-boot: "auto"
 options:
   token_file: "/media/TheFrame/tv-token.txt"
   tv_ip: "192.168.178.94"
