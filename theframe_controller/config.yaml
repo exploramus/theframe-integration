@@ -1,0 +1,41 @@
+name: "The Frame Controller"
+version: "1.0.17.002"
+slug: theframe_controller
+description: >-
+  "Control Samsung The Frame in Art Mode with this add-on."
+arch:
+  - amd64
+  - armv7
+  - aarch64
+startup: "services"
+boot: "auto"
+options:
+  token_file: "/media/TheFrame/tv-token.txt"
+  tv_ip: "192.168.178.94"
+  tv_mac: "BC:45:5B:3F:55:C5"
+  json_path: "/media/TheFrame/uploaded_files.json"
+  image_path: "/media/TheFrameImages/"
+  matte: "none"
+  tv_connect_timeout: 15
+  tv_connect_interval: 2
+schema:
+  token_file: str
+  tv_ip: str
+  tv_mac: str
+  json_path: str
+  image_path: str
+  matte: str
+  tv_connect_timeout: int
+  tv_connect_interval: int
+map:
+  - type: share
+    read_only: False
+    path: /share/
+  - type: media
+    read_only: False
+    path: /media/
+  - type: homeassistant_config
+    read_only: False
+    path: /config
+ports:
+  5000/tcp: 5000

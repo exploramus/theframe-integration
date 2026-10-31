@@ -1,0 +1,45 @@
+title: The Frame Slideshow
+views:
+  - title: Slideshow Control
+    path: slideshow
+    type: panel
+    cards:
+      - type: vertical-stack
+        title: Samsung The Frame Slideshow
+        cards:
+          - type: entities
+            entities:
+              - entity: input_text.theframe_slideshow_keywords
+                name: Keywords (comma-separated)
+              - entity: input_number.theframe_slideshow_index
+                name: Start Index
+
+          - type: horizontal-stack
+            cards:
+              - type: button
+                name: Start
+                icon: mdi:play-circle
+                tap_action:
+                  action: call-service
+                  service: rest_command.initialize_slideshow
+
+              - type: button
+                name: Previous
+                icon: mdi:chevron-left
+                tap_action:
+                  action: call-service
+                  service: rest_command.show_slideshow_previous
+
+              - type: button
+                name: Next
+                icon: mdi:chevron-right
+                tap_action:
+                  action: call-service
+                  service: rest_command.show_slideshow_next
+
+          - type: button
+            name: Show Selected Index
+            icon: mdi:numeric
+            tap_action:
+              action: call-service
+              service: rest_command.show_slideshow_index
