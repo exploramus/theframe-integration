@@ -67,7 +67,7 @@ async def async_setup_entry(
 
 
 class ShowSlideshowSwitch(TheFrameEntity, SwitchEntity):
-    """Master toggle for the timed slideshow advance."""
+    """Master toggle for the add-on's timed slideshow advance."""
 
     _attr_name = "Slideshow"
     _attr_icon = "mdi:play-box-multiple"
@@ -78,17 +78,13 @@ class ShowSlideshowSwitch(TheFrameEntity, SwitchEntity):
 
     @property
     def is_on(self) -> bool:
-        return self.coordinator.show_enabled
+        return bool(self.coordinator.slideshow.get("enabled"))
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        self.coordinator.show_enabled = True
-        if self.coordinator.active_keywords:
-            await self.coordinator.push_slideshow_keywords()
-        self.async_write_ha_state()
+        await self.coordinator.set_slideshow(enabled=True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        self.coordinator.show_enabled = False
-        self.async_write_ha_state()
+        await self.coordinator.set_slideshow(enabled=False)
 
 
 class KeywordSwitch(TheFrameEntity, SwitchEntity):
@@ -116,17 +112,22 @@ class KeywordSwitch(TheFrameEntity, SwitchEntity):
         keywords = (self.coordinator.data or {}).get(DATA_KEYWORDS, []) or []
         return self._keyword in keywords
 
+    def _active_keywords(self) -> set[str]:
+        """Keywords of the add-on's slideshow; none while it plays a file list."""
+        slideshow = self.coordinator.slideshow
+        if slideshow.get("mode") != "keywords":
+            return set()
+        return set(slideshow.get("keywords") or [])
+
     @property
     def is_on(self) -> bool:
-        return self._keyword in self.coordinator.active_keywords
+        return self._keyword in self._active_keywords()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        self.coordinator.active_keywords.add(self._keyword)
-        await self.coordinator.push_slideshow_keywords()
-        self.async_write_ha_state()
+        # turning a keyword on (re)enters keyword mode, replacing a file playlist
+        keywords = self._active_keywords() | {self._keyword}
+        await self.coordinator.set_slideshow(mode="keywords", keywords=sorted(keywords))
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        self.coordinator.active_keywords.discard(self._keyword)
-        if self.coordinator.active_keywords:
-            await self.coordinator.push_slideshow_keywords()
-        self.async_write_ha_state()
+        keywords = self._active_keywords() - {self._keyword}
+        await self.coordinator.set_slideshow(mode="keywords", keywords=sorted(keywords))

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 import logging
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -24,9 +26,16 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+EVENTS_RETRY_MIN = 5
+EVENTS_RETRY_MAX = 300
+
 
 class TheFrameCoordinator(DataUpdateCoordinator[dict]):
-    """Polls the add-on for status, keywords and file list."""
+    """Mirrors the add-on: status pushed over its event stream, files and keywords polled.
+
+    The add-on owns all state, including the slideshow and its timer; the
+    entities only read it here and change it through the API.
+    """
 
     def __init__(
         self, hass: HomeAssistant, entry: ConfigEntry, api: TheFrameApi
@@ -39,18 +48,12 @@ class TheFrameCoordinator(DataUpdateCoordinator[dict]):
         )
         self.api = api
         self.entry = entry
-        # Slideshow state lives client-side now (replaces the input_text/input_select
-        # combo from DOCS.md). The set is the source of truth; whenever it changes
-        # we tell the add-on to re-initialise its slideshow.
-        self.active_keywords: set[str] = set()
-        self.show_enabled: bool = False
-        self.interval_minutes: int = 2
 
     async def _async_update_data(self) -> dict:
         try:
             status = await self.api.status()
-            keywords = await self.api.available_keywords()
-            files = await self.api.list_files()
+            keywords = await self.api.keywords()
+            files = await self.api.files()
         except TheFrameApiError as err:
             raise UpdateFailed(str(err)) from err
 
@@ -73,12 +76,39 @@ class TheFrameCoordinator(DataUpdateCoordinator[dict]):
             DATA_FILES: files,
         }
 
-    async def push_slideshow_keywords(self) -> None:
-        """Tell the add-on which keywords are currently active."""
-        keywords = sorted(self.active_keywords)
-        if not keywords:
-            return
+    @property
+    def status(self) -> dict:
+        return (self.data or {}).get(DATA_STATUS) or {}
+
+    @property
+    def slideshow(self) -> dict:
+        return self.status.get("slideshow") or {}
+
+    async def set_slideshow(self, **changes: Any) -> None:
+        """Change slideshow settings in the add-on and mirror the result at once."""
         try:
-            await self.api.initialize_slideshow(keywords)
+            slideshow = await self.api.slideshow_update(**changes)
         except TheFrameApiError as err:
-            _LOGGER.warning("initialize_slideshow failed: %s", err)
+            _LOGGER.error("Changing the slideshow failed: %s", err)
+            return
+        if self.data is not None:
+            self.async_set_updated_data(
+                {**self.data, DATA_STATUS: {**self.status, "slideshow": slideshow}}
+            )
+
+    async def listen_for_events(self) -> None:
+        """Keep the add-on's event stream open; reconnect with back-off when it drops."""
+        delay = EVENTS_RETRY_MIN
+        while True:
+            try:
+                async for event, data in self.api.events():
+                    delay = EVENTS_RETRY_MIN
+                    if event == "status" and self.data is not None:
+                        self.async_set_updated_data({**self.data, DATA_STATUS: data})
+                    elif event == "files":
+                        await self.async_request_refresh()
+                _LOGGER.debug("Event stream ended")
+            except TheFrameApiError as err:
+                _LOGGER.debug("Event stream failed: %s", err)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, EVENTS_RETRY_MAX)

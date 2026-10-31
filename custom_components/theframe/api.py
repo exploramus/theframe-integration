@@ -1,9 +1,11 @@
-"""Thin async client for the theframe-controller add-on."""
+"""Thin async client for the theframe-controller add-on's /api/v1."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from collections.abc import AsyncIterator
 from typing import Any
 
 import aiohttp
@@ -12,14 +14,41 @@ from yarl import URL
 _LOGGER = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=20)
+# The add-on sends a keep-alive comment every 15 s, so a silent stream is a dead one.
+EVENTS_TIMEOUT = aiohttp.ClientTimeout(total=None, sock_connect=10, sock_read=60)
+
+# Every endpoint the integration uses. tests/test_contract.py checks each one
+# against the add-on's OpenAPI document, so the two cannot drift apart.
+ENDPOINTS: dict[str, tuple[str, str]] = {
+    "status": ("GET", "/api/v1/status"),
+    "events": ("GET", "/api/v1/events"),
+    "files": ("GET", "/api/v1/files"),
+    "keywords": ("GET", "/api/v1/keywords"),
+    "sync": ("POST", "/api/v1/sync"),
+    "show": ("POST", "/api/v1/show"),
+    "slideshow_update": ("PUT", "/api/v1/slideshow"),
+    "slideshow_next": ("POST", "/api/v1/slideshow/next"),
+    "slideshow_previous": ("POST", "/api/v1/slideshow/previous"),
+    "slideshow_show": ("POST", "/api/v1/slideshow/show"),
+    "thumbnail": ("GET", "/api/v1/thumbnail/{file_name}"),
+}
 
 
 class TheFrameApiError(Exception):
-    """Raised when the add-on returns an error or is unreachable."""
+    """Raised when the add-on returns an error or is unreachable.
+
+    ``code`` is the add-on's error code (e.g. ``tv_not_in_art_mode``),
+    ``None`` when the add-on could not be reached.
+    """
+
+    def __init__(self, message: str, code: str | None = None, status: int | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status = status
 
 
 class TheFrameApi:
-    """Wraps the FastAPI endpoints exposed by the add-on."""
+    """Wraps the add-on's versioned API."""
 
     def __init__(self, session: aiohttp.ClientSession, base_url: str) -> None:
         self._session = session
@@ -29,81 +58,80 @@ class TheFrameApi:
     def base_url(self) -> str:
         return str(self._base)
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> dict:
-        url = self._base / path.lstrip("/")
+    def _url(self, name: str) -> URL:
+        return self._base / ENDPOINTS[name][1].lstrip("/")
+
+    async def _request(self, name: str, json_body: Any = None) -> dict:
+        method = ENDPOINTS[name][0]
+        url = self._url(name)
         try:
             async with self._session.request(
-                method, url, timeout=REQUEST_TIMEOUT, **kwargs
+                method, url, json=json_body, timeout=REQUEST_TIMEOUT
             ) as resp:
-                resp.raise_for_status()
-                return await resp.json()
-        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+                data = await resp.json(content_type=None)
+                if resp.status >= 400:
+                    error = (data or {}).get("error") or {}
+                    raise TheFrameApiError(
+                        error.get("message") or f"{method} {url}: HTTP {resp.status}",
+                        code=error.get("code"),
+                        status=resp.status,
+                    )
+                return data
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as err:
             raise TheFrameApiError(f"{method} {url}: {err}") from err
 
-    async def _post_checked(self, path: str, **kwargs: Any) -> dict:
-        """POST a slideshow command and surface non-success responses in the log.
-
-        The add-on uses HTTP 200 for everything and signals failure via
-        ``{"status": "error", "error": "..."}`` in the body. Without this
-        check the integration would silently treat every advance attempt as
-        successful even when the TV never moves.
-        """
-        result = await self._request("POST", path, **kwargs)
-        if result.get("status") != "success":
-            _LOGGER.warning("%s returned non-success: %s", path, result)
-        return result
-
     async def status(self) -> dict:
-        return await self._request("GET", "/status")
+        return await self._request("status")
 
-    async def list_files(self) -> list[dict]:
-        data = await self._request("GET", "/list_files")
-        if data.get("status") != "success":
-            raise TheFrameApiError(data.get("error", "list_files failed"))
-        return data.get("files", [])
+    async def files(self) -> list[dict]:
+        return (await self._request("files")).get("files", [])
 
-    async def available_keywords(self) -> list[str]:
-        data = await self._request("GET", "/available_keywords")
-        if data.get("status") != "success":
-            raise TheFrameApiError(data.get("error", "available_keywords failed"))
-        return data.get("keywords", [])
+    async def keywords(self) -> list[str]:
+        return (await self._request("keywords")).get("keywords", [])
 
-    async def sync_files(self) -> dict:
-        return await self._request("POST", "/sync_files")
+    async def sync(self) -> dict:
+        """Start a sync job. Raises with code ``job_conflict`` if one is queued or running."""
+        return (await self._request("sync")).get("job", {})
 
     async def show_file(self, file_name: str) -> dict:
-        return await self._request(
-            "POST", "/show_file", json={"file_name": file_name}
-        )
+        return await self._request("show", {"file_name": file_name})
 
     async def show_image(self, content_id: str) -> dict:
-        return await self._request(
-            "POST", "/show_image", json={"content_id": content_id}
-        )
+        return await self._request("show", {"content_id": content_id})
 
-    async def initialize_slideshow(
-        self, keywords: list[str], index: int = 0
-    ) -> dict:
-        return await self._post_checked(
-            "/initialize_slideshow",
-            json={"keyword_list": keywords, "slideshow_index": index},
-        )
+    async def slideshow_update(self, **changes: Any) -> dict:
+        """Change slideshow settings: enabled, interval_minutes, mode, keywords, files, position."""
+        return await self._request("slideshow_update", changes)
 
-    async def initialize_slideshow_files(
-        self, file_names: list[str], index: int = 0
-    ) -> dict:
-        return await self._post_checked(
-            "/initialize_slideshow_files",
-            json={"file_names": file_names, "slideshow_index": index},
-        )
+    async def slideshow_next(self) -> dict:
+        return await self._request("slideshow_next")
 
-    async def show_slideshow_next(self) -> dict:
-        return await self._post_checked("/show_slideshow_next")
+    async def slideshow_previous(self) -> dict:
+        return await self._request("slideshow_previous")
 
-    async def show_slideshow_previous(self) -> dict:
-        return await self._post_checked("/show_slideshow_previous")
+    async def slideshow_show(self, position: int) -> dict:
+        return await self._request("slideshow_show", {"position": position})
+
+    async def events(self) -> AsyncIterator[tuple[str, Any]]:
+        """Yield (event, data) from the add-on's server-sent events until the stream ends."""
+        url = self._url("events")
+        try:
+            async with self._session.get(url, timeout=EVENTS_TIMEOUT) as resp:
+                resp.raise_for_status()
+                event, data = "message", []
+                async for raw in resp.content:
+                    line = raw.decode().rstrip("\r\n")
+                    if not line:
+                        if data:
+                            yield event, json.loads("\n".join(data))
+                        event, data = "message", []
+                    elif line.startswith("event:"):
+                        event = line[6:].strip()
+                    elif line.startswith("data:"):
+                        data.append(line[5:].strip())
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as err:
+            raise TheFrameApiError(f"event stream {url}: {err}") from err
 
     def thumbnail_url(self, file_name: str, size: int = 320) -> str:
-        return str(
-            (self._base / "thumbnail" / file_name).with_query({"size": str(size)})
-        )
+        path = ENDPOINTS["thumbnail"][1].replace("{file_name}", file_name)
+        return str((self._base / path.lstrip("/")).with_query({"size": str(size)}))

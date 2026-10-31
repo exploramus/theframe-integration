@@ -9,7 +9,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
-    DEFAULT_SLIDESHOW_INTERVAL_MIN,
     DOMAIN,
     MAX_SLIDESHOW_INTERVAL_MIN,
     MIN_SLIDESHOW_INTERVAL_MIN,
@@ -39,15 +38,16 @@ class SlideshowIntervalNumber(TheFrameEntity, NumberEntity):
     def __init__(self, coordinator: TheFrameCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.entry.entry_id}_interval"
-        coordinator.interval_minutes = DEFAULT_SLIDESHOW_INTERVAL_MIN
 
     @property
-    def native_value(self) -> float:
-        return float(self.coordinator.interval_minutes)
+    def native_value(self) -> float | None:
+        value = self.coordinator.slideshow.get("interval_minutes")
+        return None if value is None else float(value)
 
     async def async_set_native_value(self, value: float) -> None:
-        self.coordinator.interval_minutes = max(
-            MIN_SLIDESHOW_INTERVAL_MIN,
-            min(MAX_SLIDESHOW_INTERVAL_MIN, int(value)),
+        await self.coordinator.set_slideshow(
+            interval_minutes=max(
+                MIN_SLIDESHOW_INTERVAL_MIN,
+                min(MAX_SLIDESHOW_INTERVAL_MIN, int(value)),
+            )
         )
-        self.async_write_ha_state()

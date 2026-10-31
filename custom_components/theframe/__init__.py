@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
 
 import voluptuous as vol
 
@@ -12,11 +11,11 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.event import async_track_time_interval
 
 from .api import TheFrameApi, TheFrameApiError
 from .const import (
     CONF_BASE_URL,
+    DATA_FILES,
     DOMAIN,
     PLATFORMS,
     SERVICE_NEXT,
@@ -63,7 +62,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "api": api,
         "coordinator": coordinator,
-        "unsub_timer": None,
     }
 
     await hass.config_entries.async_forward_entry_setups(
@@ -71,7 +69,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     _register_services(hass, api, coordinator)
-    _arm_slideshow_timer(hass, entry, coordinator)
+    # Status changes arrive over the add-on's event stream; polling stays as fallback.
+    entry.async_create_background_task(
+        hass, coordinator.listen_for_events(), f"{DOMAIN}_events_{entry.entry_id}"
+    )
 
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     return True
@@ -82,9 +83,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry, [Platform(p) for p in PLATFORMS]
     )
     if unloaded:
-        bucket = hass.data[DOMAIN].pop(entry.entry_id, None)
-        if bucket and bucket.get("unsub_timer"):
-            bucket["unsub_timer"]()
+        hass.data[DOMAIN].pop(entry.entry_id, None)
         if not hass.data[DOMAIN]:
             for svc in (
                 SERVICE_SHOW_FILE,
@@ -122,53 +121,44 @@ def _register_services(
 
     async def _sync(_: ServiceCall) -> None:
         try:
-            await api.sync_files()
-        finally:
-            await coordinator.async_request_refresh()
+            job = await api.sync()
+            _LOGGER.debug("sync job %s started", job.get("id"))
+        except TheFrameApiError as err:
+            if err.code == "job_conflict":
+                _LOGGER.info("A sync is already queued or running")
+            else:
+                _LOGGER.error("sync failed: %s", err)
 
     async def _next(_: ServiceCall) -> None:
         try:
-            await api.show_slideshow_next()
+            await api.slideshow_next()
         except TheFrameApiError as err:
             _LOGGER.error("next failed: %s", err)
 
     async def _prev(_: ServiceCall) -> None:
         try:
-            await api.show_slideshow_previous()
+            await api.slideshow_previous()
         except TheFrameApiError as err:
             _LOGGER.error("previous failed: %s", err)
 
     async def _play_files(call: ServiceCall) -> None:
-        try:
-            result = await api.initialize_slideshow_files(
-                call.data["file_names"], call.data.get("slideshow_index", 0)
-            )
-        except TheFrameApiError as err:
-            _LOGGER.error("play_files failed: %s", err)
-            return
-        if result.get("status") != "success":
-            _LOGGER.error("play_files: %s", result.get("error"))
-            return
-        if missing := result.get("missing"):
+        """Switch the add-on's slideshow to an explicit, ordered playlist."""
+        file_names = call.data["file_names"]
+        index = call.data.get("slideshow_index", 0)
+        uploaded = {f.get("file_name") for f in (coordinator.data or {}).get(DATA_FILES, [])}
+        if missing := [f for f in file_names if f not in uploaded]:
             _LOGGER.warning(
                 "play_files: %d file(s) skipped because not uploaded: %s",
                 len(missing),
                 ", ".join(missing),
             )
-        # The add-on is now driving the slideshow from an explicit file
-        # list, not from keyword filtering. Clear our keyword-filter state
-        # so the per-keyword switches stop claiming to be active. Toggling
-        # any keyword switch afterwards will re-enter keyword mode and
-        # overwrite the playlist via push_slideshow_keywords — which is
-        # the expected "switch back to keyword mode" gesture.
-        coordinator.active_keywords.clear()
-        coordinator.async_update_listeners()
+        # position is the image shown last, so the next advance shows `index`
+        await coordinator.set_slideshow(mode="files", files=file_names, position=index - 1)
         if call.data.get("start", True):
             try:
-                await api.show_slideshow_next()
+                await api.slideshow_next()
             except TheFrameApiError as err:
                 _LOGGER.error("play_files: initial show failed: %s", err)
-        await coordinator.async_request_refresh()
 
     hass.services.async_register(DOMAIN, SERVICE_SHOW_FILE, _show_file, SHOW_FILE_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_SHOW_IMAGE, _show_image, SHOW_IMAGE_SCHEMA)
@@ -176,27 +166,3 @@ def _register_services(
     hass.services.async_register(DOMAIN, SERVICE_NEXT, _next)
     hass.services.async_register(DOMAIN, SERVICE_PREVIOUS, _prev)
     hass.services.async_register(DOMAIN, SERVICE_PLAY_FILES, _play_files, PLAY_FILES_SCHEMA)
-
-
-def _arm_slideshow_timer(
-    hass: HomeAssistant, entry: ConfigEntry, coordinator: TheFrameCoordinator
-) -> None:
-    """Replace the time_pattern automation with an internal 1-minute tick."""
-
-    async def _tick(_now) -> None:
-        if not coordinator.show_enabled:
-            return
-        interval = max(1, int(coordinator.interval_minutes))
-        # Only advance on aligned minute boundaries, like the original automation.
-        if _now.minute % interval != 0:
-            return
-        status = (coordinator.data or {}).get("status", {})
-        if not status.get("in_artmode"):
-            return
-        try:
-            await coordinator.api.show_slideshow_next()
-        except TheFrameApiError as err:
-            _LOGGER.debug("slideshow next failed: %s", err)
-
-    unsub = async_track_time_interval(hass, _tick, timedelta(minutes=1))
-    hass.data[DOMAIN][entry.entry_id]["unsub_timer"] = unsub

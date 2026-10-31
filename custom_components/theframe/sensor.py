@@ -21,6 +21,7 @@ async def async_setup_entry(
             CurrentImageSensor(coordinator),
             ImageCountSensor(coordinator),
             SlideshowIndexSensor(coordinator),
+            SyncSensor(coordinator),
         ]
     )
 
@@ -88,10 +89,35 @@ class SlideshowIndexSensor(TheFrameEntity, SensorEntity):
 
     @property
     def native_value(self) -> int | None:
-        status = (self.coordinator.data or {}).get(DATA_STATUS) or {}
-        return status.get("slideshow_index")
+        position = self.coordinator.slideshow.get("position")
+        return None if position is None or position < 0 else position
 
     @property
     def extra_state_attributes(self) -> dict:
-        status = (self.coordinator.data or {}).get(DATA_STATUS) or {}
-        return {"slideshow_count": status.get("slideshow_count")}
+        slideshow = self.coordinator.slideshow
+        return {
+            "slideshow_count": slideshow.get("count"),
+            "mode": slideshow.get("mode"),
+            "current_file": self.coordinator.status.get("current_file"),
+        }
+
+
+class SyncSensor(TheFrameEntity, SensorEntity):
+    """State of the add-on's sync job: idle, queued (waiting for art mode), running or done."""
+
+    _attr_name = "Sync"
+    _attr_icon = "mdi:cloud-sync"
+
+    def __init__(self, coordinator: TheFrameCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_sync_job"
+
+    @property
+    def native_value(self) -> str:
+        job = self.coordinator.status.get("job") or {}
+        return job.get("state", "idle")
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        job = self.coordinator.status.get("job") or {}
+        return {k: job.get(k) for k in ("total", "done", "attempts", "error", "started", "finished")}

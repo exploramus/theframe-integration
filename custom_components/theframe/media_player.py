@@ -129,24 +129,18 @@ class TheFramePlayer(TheFrameEntity, MediaPlayerEntity):
             await self.coordinator.api.show_file(file_name)
         except TheFrameApiError as err:
             _LOGGER.error("show_file(%s) failed: %s", file_name, err)
-        else:
-            await self.coordinator.async_request_refresh()
 
     async def async_media_next_track(self) -> None:
         try:
-            await self.coordinator.api.show_slideshow_next()
+            await self.coordinator.api.slideshow_next()
         except TheFrameApiError as err:
             _LOGGER.error("next failed: %s", err)
-        else:
-            await self.coordinator.async_request_refresh()
 
     async def async_media_previous_track(self) -> None:
         try:
-            await self.coordinator.api.show_slideshow_previous()
+            await self.coordinator.api.slideshow_previous()
         except TheFrameApiError as err:
             _LOGGER.error("previous failed: %s", err)
-        else:
-            await self.coordinator.async_request_refresh()
 
     async def async_browse_media(
         self, media_content_type: str | None = None, media_content_id: str | None = None

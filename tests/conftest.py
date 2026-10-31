@@ -25,6 +25,15 @@ def theframe(tmp_path_factory):
     return module
 
 
+@pytest.fixture(scope="session")
+def client_api():
+    """the integration's API client; api.py has no Home Assistant imports, so it loads without Home Assistant"""
+    spec = importlib.util.spec_from_file_location("theframe_client_api", ROOT / "custom_components" / "theframe" / "api.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def write_options(tmp_path, **options):
     images = tmp_path / "images"
     images.mkdir(exist_ok=True)
