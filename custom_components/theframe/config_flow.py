@@ -59,7 +59,12 @@ class TheFrameConfigFlow(ConfigFlow, domain=DOMAIN):
                 ): str,
             }
         )
-        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+        return self.async_show_form(
+            step_id="user",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={"default_url": DEFAULT_BASE_URL},
+        )
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None

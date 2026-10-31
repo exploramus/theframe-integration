@@ -8,7 +8,7 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY theframe.py ./
+COPY app/ ./
 
 CMD ["fastapi", "run", "theframe.py", "--port", "5000" ]
 

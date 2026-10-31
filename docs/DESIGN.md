@@ -149,7 +149,15 @@ Key test scenarios: add-on starts with TV off and answers immediately; queued sy
 ## 6. Implementation order
 
 0. **Hotfix release of the current add-on** (before anything else): `samsungframetv==4.1.4` from PyPI, imports changed to `samsungframetv`, otherwise unchanged. Test once against the real TV, release, install on the Pi. Run the library's `diagnose` tool once against the TV and record the results. *Code change done (add-on 1.0.17.002, not yet released); diagnose done 2026-10-31, results in 3.0.*
-1. Monorepo layout and CI.
+1. Monorepo layout and CI. *Done on branch `step1/monorepo` (not yet pushed), details below.*
+
+   - Monorepo is `exploramus/theframe-integration`; the add-on was imported with its history (`git subtree`) into `theframe_controller/`, code in `theframe_controller/app/`. `exploramus/theframe-controller` is to be archived after the first release from here.
+   - Shared version **1.1.0** in `manifest.json` and add-on `config.yaml`; `tests/test_versions.py` checks they match each other, the add-on changelog and, on release, the tag.
+   - Add-on installs as a prebuilt image `ghcr.io/exploramus/theframe-controller-{arch}`, arches aarch64 and amd64 (armv7 dropped).
+   - CI (`.github/workflows/ci.yaml`): ruff (baseline rules E4/E7/E9/F), pytest, hassfest, HACS validation (brands ignored), add-on linter, image build for both arches. Release (`release.yaml`, on tag `v*`): version check, push images to GHCR with `io.hass.*` labels, GitHub release.
+   - Fixed along the way: hassfest errors (manifest key order, URL in config-flow strings), `__pycache__` untracked, five unused imports, `tilo-boehmann` links.
+   - Checked locally: ruff, pytest, actionlint, hassfest, Docker build and import smoke test for both arches. Not checked locally: HACS validation and the add-on linter (need GitHub), Supervisor install from the new repository (HAOS VM or Pi, after the first release).
+   - Deferred: mypy for the integration (needs Home Assistant installed; add with pytest-homeassistant-custom-component in step 3).
 2. Add-on refactor on `samsungframetv` 4.1.x: TV monitor based on `get_power_state()`, client created off the event loop, library timeouts and back-off, start without the TV, `host_network: true`, config via env; optional IP Control.
 3. Fake TV and the state-based tests (using the library's fixtures as reference).
 4. Job model, persisted state, event stream, versioned API; integration adapted to it.

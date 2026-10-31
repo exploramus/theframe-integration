@@ -16,8 +16,6 @@ import json
 import logging
 import sys
 import io
-import random
-import json
 import time
 import datetime
 import re
@@ -33,7 +31,6 @@ except ImportError:
 
 
 from samsungframetv.async_art import SamsungTVAsyncArt
-from samsungframetv import __version__
 
 
 

@@ -1,12 +1,13 @@
 name: "The Frame Controller"
-version: "1.0.17.002"
+version: "1.1.0"
 slug: theframe_controller
+url: "https://github.com/exploramus/theframe-integration"
+image: "ghcr.io/exploramus/theframe-controller-{arch}"
 description: >-
   "Control Samsung The Frame in Art Mode with this add-on."
 arch:
-  - amd64
-  - armv7
   - aarch64
+  - amd64
 startup: "services"
 boot: "auto"
 options:
