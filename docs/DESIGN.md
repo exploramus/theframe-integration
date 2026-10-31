@@ -157,6 +157,7 @@ Key test scenarios: add-on starts with TV off and answers immediately; queued sy
    - CI (`.github/workflows/ci.yaml`): ruff (baseline rules E4/E7/E9/F), pytest, hassfest, HACS validation (brands ignored), add-on linter, image build for both arches. Release (`release.yaml`, on tag `v*`): version check, push images to GHCR with `io.hass.*` labels, GitHub release.
    - Fixed along the way: hassfest errors (manifest key order, URL in config-flow strings), `__pycache__` untracked, five unused imports, `tilo-boehmann` links.
    - Checked locally: ruff, pytest, actionlint, hassfest, Docker build and import smoke test for both arches. Not checked locally: HACS validation and the add-on linter (need GitHub), Supervisor install from the new repository (HAOS VM or Pi, after the first release).
+   - Repository made public on 2026-10-31 (needed by HACS, the Supervisor add-on store and anonymous GHCR pulls); description and topics set for HACS. History checked before: no secrets; the TV's LAN IP and MAC are visible as add-on defaults.
    - Deferred: mypy for the integration (needs Home Assistant installed; add with pytest-homeassistant-custom-component in step 3).
 2. Add-on refactor on `samsungframetv` 4.1.x: TV monitor based on `get_power_state()`, client created off the event loop, library timeouts and back-off, start without the TV, `host_network: true`, config via env; optional IP Control.
 3. Fake TV and the state-based tests (using the library's fixtures as reference).
