@@ -4,7 +4,6 @@ import json
 import os
 import time
 
-import pytest
 from fastapi.testclient import TestClient
 
 from conftest import write_options
@@ -110,7 +109,7 @@ def test_connection_drop_mid_upload_is_retried(theframe, addon, monkeypatch):
     addon.check()
     assert set(recorded(addon)) == {"a.jpg", "b.jpg", "c.jpg"}
     assert len(addon.tv.photos) == 3           # nothing uploaded twice
-    assert addon.controller._sync_pending is False
+    assert addon.controller.sync_pending is False
 
 
 def test_leaving_art_mode_during_sync_keeps_it_queued(addon):
@@ -123,7 +122,7 @@ def test_leaving_art_mode_during_sync_keeps_it_queued(addon):
     assert len(recorded(addon)) == 1           # folder order is arbitrary
 
     addon.check()                               # monitor sees 'tv': still queued
-    assert addon.controller._sync_pending is True
+    assert addon.controller.sync_pending is True
 
     addon.tv.power = "art"
     addon.check()
@@ -174,7 +173,6 @@ def test_modified_file_is_reuploaded(addon):
     assert set(addon.tv.photos) == {new}
 
 
-@pytest.mark.xfail(strict=True, reason="step 4: slideshow stores file names and resolves content IDs at display time")
 def test_slideshow_survives_a_reupload(addon):
     path = write_image(addon.images, "a.jpg")
     write_image(addon.images, "b.jpg")
@@ -189,7 +187,6 @@ def test_slideshow_survives_a_reupload(addon):
     assert data == {"status": "success", "shown": recorded(addon)["a.jpg"]}
 
 
-@pytest.mark.xfail(strict=True, reason="step 4: slideshow state is persisted in /data")
 def test_slideshow_survives_an_addon_restart(theframe, addon, tmp_path):
     write_image(addon.images, "a.jpg")
     write_image(addon.images, "b.jpg")

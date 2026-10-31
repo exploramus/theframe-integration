@@ -23,25 +23,16 @@ def test_status_answers_while_tv_unreachable(addon):
     assert "no route to host" in data["error"]
 
 
-def test_tv_coming_back_resets_art_service_and_runs_pending_sync(addon):
-    synced = []
-
-    async def run_pending_sync():
-        synced.append(True)
-
-    addon.controller._run_pending_sync = run_pending_sync
-    addon.controller._sync_pending = True
+def test_tv_coming_back_resets_art_service(addon):
     addon.tv.power = "off"
     addon.check()
     assert addon.controller.monitor.state == "off"
-    assert synced == []
 
     addon.tv.power = "art"
     addon.tv.current = addon.tv.add_photo("MY_F1")
     addon.check()
     assert addon.controller.monitor.state == "art"
     assert addon.tv.reset_calls == 1
-    assert synced == [True]
     assert addon.controller.monitor.current_content_id == "MY_F1"
 
 

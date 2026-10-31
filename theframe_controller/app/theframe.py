@@ -6,11 +6,14 @@
 # It also includes PIL for image processing if available.
 # This code is designed to run in a Home Assistant environment, where it can be used as an add-on.
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response, StreamingResponse
+from typing import Literal, Optional
 from contextlib import asynccontextmanager
 import contextlib
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import asyncio
 import os
 import json
@@ -19,6 +22,7 @@ import io
 import time
 import datetime
 import re
+import uuid
 import xml.etree.ElementTree as ET
 from wakeonlan import send_magic_packet
 from iptcinfo3 import IPTCInfo
@@ -43,6 +47,118 @@ TV_CHECK_TIMEOUT = 15       # power state check; the library's async REST calls 
 TV_CONNECT_TIMEOUT = 10     # client timeout: sync REST call in the constructor and websocket open
 TV_ON_STATES = ('tv', 'art', 'on')
 SYNC_RETRY_DELAY = 60       # seconds before a failed sync is retried
+SLIDESHOW_TICK = 5          # seconds between slideshow timer checks
+EVENT_KEEPALIVE = 15        # seconds between keep-alive comments on the event stream
+
+
+def api_error(status_code, code, message):
+    '''
+    /api/v1 error response: HTTP status plus a stable error code
+    '''
+    return JSONResponse(status_code=status_code, content={"error": {"code": code, "message": message}})
+
+
+class Slideshow:
+    '''
+    slideshow state owned by the add-on and persisted, so it survives restarts
+    stores file names; content_ids are looked up when an image is shown, so a re-upload does not break it
+    position is the index of the image shown last, -1 before the first one
+    '''
+
+    FIELDS = ('enabled', 'interval_minutes', 'mode', 'keywords', 'files', 'position')
+
+    def __init__(self, path=None):
+        self.log = logging.getLogger('Main.'+__class__.__name__)
+        self.path = path
+        self.enabled = False
+        self.interval_minutes = 2
+        self.mode = 'keywords'      # keywords: files matching any keyword; files: an ordered playlist
+        self.keywords = []
+        self.files = []
+        self.position = -1
+        self.load()
+
+    def as_dict(self):
+        return {k: getattr(self, k) for k in self.FIELDS}
+
+    def load(self):
+        if not self.path or not os.path.isfile(self.path):
+            return
+        try:
+            with open(self.path) as f:
+                data = json.load(f).get('slideshow', {})
+            for k in self.FIELDS:
+                if k in data:
+                    setattr(self, k, data[k])
+        except Exception as e:
+            self.log.warning('could not read slideshow state from {}: {}'.format(self.path, e))
+
+    def save(self):
+        if not self.path:
+            return
+        try:
+            tmp = self.path + '.tmp'
+            with open(tmp, 'w') as f:
+                json.dump({'slideshow': self.as_dict()}, f)
+            os.replace(tmp, self.path)
+        except Exception as e:
+            self.log.warning('could not save slideshow state to {}: {}'.format(self.path, e))
+
+
+class SyncJob:
+    '''
+    one sync of the image folder with the TV; waits as 'queued' until the TV is in art mode
+    states: queued, running, done
+    '''
+
+    def __init__(self):
+        self.id = uuid.uuid4().hex[:8]
+        self.kind = 'sync'
+        self.state = 'queued'
+        self.created = time.time()
+        self.started = None
+        self.finished = None
+        self.total = 0
+        self.done = 0
+        self.attempts = 0
+        self.error = None
+        self.ran = asyncio.Event()      # set each time a run ends
+
+    def as_dict(self):
+        return {k: getattr(self, k) for k in ('id', 'kind', 'state', 'created', 'started', 'finished', 'total', 'done', 'attempts', 'error')}
+
+
+class EventHub:
+    '''
+    fans server-sent events out to connected clients; a slow client drops events and catches up
+    with the next status event
+    '''
+
+    def __init__(self):
+        self.queues = set()
+
+    def publish(self, event, data):
+        for queue in list(self.queues):
+            with contextlib.suppress(asyncio.QueueFull):
+                queue.put_nowait((event, data))
+
+    @staticmethod
+    def format(event, data):
+        return 'event: {}\ndata: {}\n\n'.format(event, json.dumps(data))
+
+    async def stream(self, first_event):
+        queue = asyncio.Queue(maxsize=100)
+        self.queues.add(queue)
+        try:
+            yield self.format(*first_event)
+            while True:
+                try:
+                    event, data = await asyncio.wait_for(queue.get(), EVENT_KEEPALIVE)
+                    yield self.format(event, data)
+                except asyncio.TimeoutError:
+                    yield ': keepalive\n\n'
+        finally:
+            self.queues.discard(queue)
 
 
 class TVMonitor:
@@ -120,10 +236,11 @@ class TVMonitor:
         self.set_state(state)
         if self.in_artmode:
             self.current_content_id = await self.mon.get_current_artwork()
-            if self.mon._sync_pending:
-                asyncio.create_task(self.mon._run_pending_sync())
+            if self.mon.sync_pending:
+                asyncio.create_task(self.mon.run_sync_job())
         else:
             self.current_content_id = None
+        self.mon.publish_status()
 
     def set_state(self, state):
         previous = self.state
@@ -280,9 +397,12 @@ class TheFrameController:
         @asynccontextmanager
         async def lifespan(_: FastAPI):
             # the server answers at once; the monitor finds the TV in the background
-            task = asyncio.create_task(self.monitor.run()) if not self.config_error else None
+            tasks = [] if self.config_error else [
+                asyncio.create_task(self.monitor.run()),
+                asyncio.create_task(self._slideshow_timer()),
+            ]
             yield
-            if task:
+            for task in tasks:
                 task.cancel()
             if self.tv is not None:
                 with contextlib.suppress(Exception):
@@ -292,10 +412,11 @@ class TheFrameController:
         logging.basicConfig(level=logging.INFO)
         self.log = logging.getLogger('Main.'+__class__.__name__)
         self.tv_files = {}
-        self.slideshow_files = {}
-        self.slideshow_index = 0
-        self._sync_pending = False
+        self.job = None                 # current or last sync job
         self._sync_retry_after = 0
+        self._last_advance = time.monotonic()
+        self._published_status = None
+        self.events = EventHub()
         self._sync_lock = asyncio.Lock()
         self.tv = None
         self.ip_control = None
@@ -331,7 +452,13 @@ class TheFrameController:
         self.pil = PIL_methods(self)
         self.port=8002
         self.monitor = TVMonitor(self)
+        # slideshow state lives next to the options, i.e. in the add-on's /data
+        self.slideshow = Slideshow(os.path.join(os.path.dirname(os.path.abspath(options_file)), "state.json"))
+        if self.json_path and os.path.isfile(self.json_path):
+            with contextlib.suppress(Exception):
+                self.tv_files = self.read_uploaded_files(self.json_path)
         self.setup_routes()
+        self.setup_v1_routes()
 
     def paired_ip_control(self):
         return self.ip_control if self.ip_control is not None and self.ip_control.token else None
@@ -392,6 +519,8 @@ class TheFrameController:
             raise RuntimeError(f"Unexpected error reading {json_path}: {e}")
 
     async def check_file_dict_availability(self, reload=False):
+        if not (self.json_path and os.path.isfile(self.json_path)):
+            return      # fresh install: nothing uploaded yet
         if not self.tv_files or reload:
             try:
                 files = self.read_uploaded_files(self.json_path)
@@ -601,6 +730,9 @@ class TheFrameController:
                 else:
                     self.log.warning('file: {} failed to upload'.format(filename))
                 self.write_program_data()
+                if self.job is not None and self.job.state == 'running':
+                    self.job.done += 1
+                    self.publish_status()
             
     async def find_unconfirmed_upload(self, known):
         '''
@@ -646,11 +778,17 @@ class TheFrameController:
             return True
         return False
             
+    def new_files(self, files):
+        return [f for f in files if f not in self.tv_files.keys()]
+
+    def modified_files(self, files):
+        return [f for f in files if f in self.tv_files.keys() and self.tv_files[f].get('modified') != self.get_last_updated(f)]
+
     async def add_files(self, files):
         '''
         if new files found, upload to tv
         '''
-        new_files = [f for f in files if f not in self.tv_files.keys()]
+        new_files = self.new_files(files)
         #upload new files
         if new_files:
             self.log.info('adding files to tv : {}'.format(new_files))
@@ -664,7 +802,7 @@ class TheFrameController:
         check if files were modified
         if so, delete old content on tv and upload new
         '''
-        modified_files = [f for f in files if f in self.tv_files.keys() and self.tv_files[f].get('modified') != self.get_last_updated(f)]
+        modified_files = self.modified_files(files)
         #delete old file and upload new:
         if modified_files:
             self.log.info('updating files on tv : {}'.format(modified_files))
@@ -679,13 +817,16 @@ class TheFrameController:
         #wait for files to arrive
         await asyncio.sleep(min(10, 5 * len(files)))
         
-    async def _do_sync(self):
+    async def _do_sync(self, job=None):
         '''
         returns False if the tv left art mode during the sync, so some files were skipped
         '''
         files = self.get_folder_files()
         await self.sync_file_list()
         await self.remove_files(files)
+        if job is not None:
+            job.total = len(self.new_files(files)) + len(self.modified_files(files))
+            job.done = 0
         await self.add_files(files)
         await self.update_files(files)
         if self.tv.art_mode is False:
@@ -693,58 +834,215 @@ class TheFrameController:
             return False
         return True
 
-    def _sync_failed(self, e):
-        self.log.warning('sync failed, retrying in art mode after {}s: {}'.format(SYNC_RETRY_DELAY, e))
-        self._sync_pending = True
-        self._sync_retry_after = time.monotonic() + SYNC_RETRY_DELAY
+    @property
+    def sync_pending(self):
+        return self.job is not None and self.job.state == 'queued'
 
-    async def scan_and_sync_dir(self):
+    def request_sync(self):
         '''
-        scan folder for new, deleted or updated files, but only when tv is in art mode.
-        sets _sync_pending if TV is not ready so the sync runs automatically when it is.
+        returns (job, created): the queued or running sync job, or a new queued one
         '''
-        try:
-            if self.monitor.in_artmode:
-                self.log.info('checking directory: {}'.format(self.folder))
-                self._sync_pending = not await self._do_sync()
-            else:
-                self.log.info('artmode or tv is off, queuing sync')
-                self._sync_pending = True
-        except Exception as e:
-            self._sync_failed(e)
+        if self.job is not None and self.job.state in ('queued', 'running'):
+            return self.job, False
+        self.job = SyncJob()
+        self.publish_status()
+        return self.job, True
 
-    async def _run_pending_sync(self):
+    async def run_sync_job(self):
         '''
-        run a deferred sync if one is pending; no-op if already running or cleared.
-        uses double-checked locking to prevent redundant syncs.
+        run the queued sync job if the tv is in art mode; one job at a time
+        a sync that fails, or that is cut short by leaving art mode, stays queued and is retried
         '''
-        if not self._sync_pending or time.monotonic() < self._sync_retry_after:
+        job = self.job
+        if job is None or job.state != 'queued' or not self.monitor.in_artmode:
+            return
+        if time.monotonic() < self._sync_retry_after:
             return
         async with self._sync_lock:
-            if not self._sync_pending:
+            if job.state != 'queued':
                 return
+            job.state = 'running'
+            job.started = time.time()
+            job.attempts += 1
+            job.error = None
+            job.ran.clear()
+            self.publish_status()
             try:
-                if self.monitor.in_artmode:
-                    self.log.info('running deferred sync')
-                    self._sync_pending = not await self._do_sync()
+                self.log.info('sync {}: checking directory: {}'.format(job.id, self.folder))
+                if await self._do_sync(job):
+                    job.state = 'done'
+                    job.finished = time.time()
+                else:
+                    job.state = 'queued'
             except Exception as e:
-                self._sync_failed(e)
+                self.log.warning('sync {} failed, retrying in art mode after {}s: {}'.format(job.id, SYNC_RETRY_DELAY, e))
+                job.state = 'queued'
+                job.error = str(e)
+                self._sync_retry_after = time.monotonic() + SYNC_RETRY_DELAY
+            job.ran.set()
+        self.publish_status()
+        self.events.publish('files', {'file_count': len(self.tv_files)})
 
+    @staticmethod
+    def file_keywords(entry):
+        '''
+        keywords of an uploaded_files entry, stored as a JSON string (or a list by older writers)
+        '''
+        raw = entry.get('keywords')
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                return []
+        return raw if isinstance(raw, list) else []
+
+    def playlist(self):
+        '''
+        file names in the slideshow, in order; only files uploaded to the tv
+        '''
+        if self.slideshow.mode == 'files':
+            return [f for f in self.slideshow.files if f in self.tv_files]
+        wanted = set(self.slideshow.keywords)
+        return [f for f, v in self.tv_files.items() if wanted.intersection(self.file_keywords(v))]
+
+    async def slideshow_show(self, position):
+        '''
+        show the slideshow image at position (wrapping); content_id is looked up now, so re-uploads are fine
+        returns (content_id, error) where error is None, 'empty_slideshow' or 'tv_error'
+        '''
+        playlist = self.playlist()
+        if not playlist:
+            return None, 'empty_slideshow'
+        position %= len(playlist)
+        content_id = self.tv_files[playlist[position]].get('content_id')
+        if not content_id or not await self.select_image(content_id):
+            return None, 'tv_error'
+        self.slideshow.position = position
+        self.slideshow.save()
+        self._last_advance = time.monotonic()
+        self.publish_status()
+        return content_id, None
+
+    def update_slideshow(self, **changes):
+        for k, v in changes.items():
+            if v is not None:
+                setattr(self.slideshow, k, v)
+        self.slideshow.save()
+        self.publish_status()
+
+    async def slideshow_tick(self):
+        '''
+        advance the slideshow when its interval is up; pauses outside art mode and while a sync runs
+        '''
+        s = self.slideshow
+        if not s.enabled or not self.monitor.in_artmode:
+            return
+        if self.job is not None and self.job.state == 'running':
+            return
+        if time.monotonic() - self._last_advance < s.interval_minutes * 60:
+            return
+        await self.slideshow_show(s.position + 1)
+
+    async def _slideshow_timer(self):
+        while True:
+            await asyncio.sleep(SLIDESHOW_TICK)
+            try:
+                await self.slideshow_tick()
+            except Exception as e:
+                self.log.warning('slideshow advance failed: {}'.format(e))
+
+    def current_file(self):
+        content_id = self.monitor.current_content_id
+        if not content_id:
+            return None
+        return next((f for f, v in self.tv_files.items() if v.get('content_id') == content_id), None)
+
+    def status(self):
+        '''
+        status answered from cached state, never waits for the tv
+        '''
+        count = len(self.playlist())
+        return {
+            "in_artmode": None if self.monitor.state == 'unknown' else self.monitor.in_artmode,
+            "current_content_id": self.monitor.current_content_id,
+            "current_file": self.current_file(),
+            "sync_pending": self.sync_pending,
+            "file_count": len(self.tv_files),
+            # legacy meaning: position of the next image to show
+            "slideshow_index": (self.slideshow.position + 1) % count if count else 0,
+            "slideshow_count": count,
+            "slideshow": dict(self.slideshow.as_dict(), count=count),
+            "job": self.job.as_dict() if self.job is not None else None,
+            "power_state": self.monitor.state,
+            "power_state_since": self.monitor.since,
+            "last_check": self.monitor.last_check,
+            "art_service_available": self.tv.art_service_available if self.tv is not None else None,
+            "ip_control": "paired" if self.paired_ip_control() else ("unpaired" if self.ip_control else "disabled"),
+            "error": self.monitor.error,
+        }
+
+    def publish_status(self):
+        '''
+        push the status to event stream clients when it changed (ignoring the check timestamp)
+        '''
+        status = self.status()
+        compare = dict(status, last_check=None)
+        if compare != self._published_status:
+            self._published_status = compare
+            self.events.publish('status', status)
+
+    async def file_items(self):
+        '''
+        uploaded files with content_id and keywords, sorted by name
+        '''
+        await self.check_file_dict_availability(reload=True)
+        items = [{
+            "file_name": filename,
+            "content_id": entry.get("content_id"),
+            "keywords": self.file_keywords(entry),
+            "modified": entry.get("modified"),
+        } for filename, entry in self.tv_files.items()]
+        items.sort(key=lambda x: x["file_name"].lower())
+        return items
+
+    async def all_keywords(self):
+        await self.check_file_dict_availability(reload=True)
+        return sorted({k for entry in self.tv_files.values() for k in self.file_keywords(entry)})
+
+    async def wake(self):
+        '''
+        wake the tv: IP Control if paired, else Wake-on-LAN (needs tv_mac and host network)
+        returns the method used, or None if there is no way to wake the tv
+        '''
+        if self.paired_ip_control():
+            async with asyncio.timeout(TV_CALL_TIMEOUT):
+                await self.ip_control.async_call("power_on")
+            method = "ip_control"
+        elif self.tv_mac:
+            await asyncio.to_thread(send_magic_packet, self.tv_mac)
+            method = "wol"
+        else:
+            return None
+        self.monitor.poke()
+        return method
 
     def setup_routes(self):
 
         @self.app.post("/sync_files")
         async def sync_files():
+            '''
+            deprecated, use POST /api/v1/sync; waits for the sync instead of returning a job
+            '''
             if self.config_error:
                 return {"status": "error", "error": self.config_error}
-            async with self._sync_lock:
-                try:
-                    await self.scan_and_sync_dir()
-                    if self._sync_pending:
-                        return {"status": "queued", "message": "sync queued, it runs when the TV is in art mode"}
-                    return {"status": "success", "files": self.tv_files}
-                except Exception as e:
-                    return {"status": "error", "error": str(e)}
+            job, _ = self.request_sync()
+            if job.state == 'running':
+                await job.ran.wait()
+            else:
+                await self.run_sync_job()       # no-op unless the tv is in art mode
+            if job.state == 'done':
+                return {"status": "success", "files": self.tv_files}
+            return {"status": "queued", "message": "sync queued, it runs when the TV is in art mode"}
 
         @self.app.post("/reconcile_files")
         async def reconcile_files():
@@ -773,8 +1071,6 @@ class TheFrameController:
             error = self.art_mode_error()
             if error:
                 return error
-            if self._sync_pending:
-                asyncio.create_task(self._run_pending_sync())
             if not await self.select_image(req.content_id):
                 raise RuntimeError(f"Failed to display content_id {req.content_id}")
             return {"status": "success", "shown": req.content_id}
@@ -784,8 +1080,6 @@ class TheFrameController:
             error = self.art_mode_error()
             if error:
                 return error
-            if self._sync_pending:
-                asyncio.create_task(self._run_pending_sync())
             content_id = await self.get_content_id(req.file_name)
             if not content_id:
                 return {"status": "error", "error": "Content ID not found"}
@@ -795,186 +1089,85 @@ class TheFrameController:
 
         @self.app.post("/initialize_slideshow")
         async def initialize_slideshow(req: self.SlideshowInitializeRequest):
-            slideshow_keywords = req.keyword_list
-            if not slideshow_keywords:
+            '''
+            deprecated, use PUT /api/v1/slideshow; keyword slideshow, index is the next image to show
+            '''
+            if not req.keyword_list:
                 return {"status": "error", "error": "No slideshow keywords to show"}
             await self.check_file_dict_availability(reload=True)
-
-            wanted = set(slideshow_keywords)
-            matched = {}
-            for k, v in self.tv_files.items():
-                raw = v.get("keywords")
-                if not raw:
-                    continue
-                # Stored either as a JSON-encoded string (the normal case) or
-                # already as a list (legacy / external writers). Decode either
-                # to a real list and do an exact-membership check — the old
-                # substring match on the JSON string broke for any keyword
-                # that json.dumps escapes (German umlauts produced "Blüte"
-                # which never matched "Blüte").
-                if isinstance(raw, str):
-                    try:
-                        file_keywords = json.loads(raw)
-                    except Exception:
-                        continue
-                else:
-                    file_keywords = raw
-                if not isinstance(file_keywords, list):
-                    continue
-                if wanted.intersection(file_keywords):
-                    matched[k] = v
-
+            wanted = set(req.keyword_list)
+            matched = {k: v for k, v in self.tv_files.items() if wanted.intersection(self.file_keywords(v))}
             self.log.info(
                 "initialize_slideshow: %d/%d files matched keywords=%s",
-                len(matched), len(self.tv_files), slideshow_keywords,
+                len(matched), len(self.tv_files), req.keyword_list,
             )
             if not matched:
-                # Don't wipe the previous selection just because this filter
-                # returned zero — keeps the running slideshow alive while
-                # signalling the failure to the caller.
+                # keep the running slideshow instead of wiping it for a filter without matches
                 return {"status": "error", "error": "No valid slideshow files found"}
-
-            self.slideshow_files = matched
-            if (
-                not isinstance(req.slideshow_index, int)
-                or req.slideshow_index < 0
-                or req.slideshow_index >= len(self.slideshow_files)
-            ):
-                self.slideshow_index = 0
-            else:
-                self.slideshow_index = req.slideshow_index
-            return {"status": "success", "slideshow": self.slideshow_files, "index": self.slideshow_index}
+            index = req.slideshow_index if 0 <= req.slideshow_index < len(matched) else 0
+            self.update_slideshow(mode='keywords', keywords=list(req.keyword_list), position=index - 1)
+            return {"status": "success", "slideshow": matched, "index": index}
 
         @self.app.post("/initialize_slideshow_files")
         async def initialize_slideshow_files(req: self.SlideshowFilesRequest):
             '''
-            Set the active slideshow to an explicit, ordered list of file names
-            (curated playlist). The same slideshow_files / slideshow_index state
-            is reused, so /show_slideshow_next, /show_slideshow_previous,
-            /show_slideshow_index and the existing slideshow timer all work
-            unchanged on the loaded playlist.
-
-            Files not currently uploaded to the TV are skipped and reported in
-            the "missing" key of the response. Order is preserved (Python dicts
-            keep insertion order); duplicate file names are collapsed.
+            deprecated, use PUT /api/v1/slideshow; ordered playlist of file names (curated slideshow)
+            files not uploaded to the tv are skipped and reported in "missing"; duplicates are collapsed
             '''
             if not req.file_names:
                 return {"status": "error", "error": "No file names provided"}
             await self.check_file_dict_availability(reload=True)
-
-            accepted = {}
-            missing = []
-            for fname in req.file_names:
-                if fname in self.tv_files:
-                    accepted[fname] = self.tv_files[fname]
-                else:
-                    missing.append(fname)
-
+            accepted = list(dict.fromkeys(f for f in req.file_names if f in self.tv_files))
+            missing = [f for f in req.file_names if f not in self.tv_files]
             if not accepted:
                 return {
                     "status": "error",
                     "error": "None of the provided files are uploaded to the TV",
                     "missing": missing,
                 }
+            index = req.slideshow_index if 0 <= req.slideshow_index < len(accepted) else 0
+            self.update_slideshow(mode='files', files=accepted, position=index - 1)
+            return {"status": "success", "count": len(accepted), "missing": missing, "index": index}
 
-            self.slideshow_files = accepted
-            if (
-                not isinstance(req.slideshow_index, int)
-                or req.slideshow_index < 0
-                or req.slideshow_index >= len(self.slideshow_files)
-            ):
-                self.slideshow_index = 0
-            else:
-                self.slideshow_index = req.slideshow_index
-
-            return {
-                "status": "success",
-                "count": len(self.slideshow_files),
-                "missing": missing,
-                "index": self.slideshow_index,
-            }
+        async def legacy_slideshow_show(position):
+            error = self.art_mode_error()
+            if error:
+                return error
+            content_id, error = await self.slideshow_show(position)
+            if error == 'empty_slideshow':
+                return {"status": "error", "error": "No slideshow files to show"}
+            if error:
+                return {"status": "error", "error": "Failed to display content ID"}
+            return {"status": "success", "shown": content_id}
 
         @self.app.post("/show_slideshow_next")
         async def show_slideshow_next():
-            error = self.art_mode_error()
-            if error:
-                return error
-            if self._sync_pending:
-                asyncio.create_task(self._run_pending_sync())
-            if not self.slideshow_files:
-                return {"status": "error", "error": "No slideshow files to show"}
-            content_id = list(self.slideshow_files.values())[self.slideshow_index].get("content_id")
-            if not content_id:
-                return {"status": "error", "error": "No content ID found for the file"}
-#            file = list(self.slideshow_files.keys())[self.slideshow_index]
-#            content_id = await self.get_content_id(file)
-#            if not content_id:
-#                return {"status": "error", "error": "No content ID found for the file"}
-            if not await self.select_image(content_id):
-                return {"status": "error", "error": "Failed to display content ID"}
-            self.slideshow_index = (self.slideshow_index + 1) % len(self.slideshow_files)
-            return {"status": "success", "shown": content_id}
+            '''
+            deprecated, use POST /api/v1/slideshow/next
+            '''
+            return await legacy_slideshow_show(self.slideshow.position + 1)
 
         @self.app.post("/show_slideshow_previous")
         async def show_slideshow_previous():
-            error = self.art_mode_error()
-            if error:
-                return error
-            if self._sync_pending:
-                asyncio.create_task(self._run_pending_sync())
-            if not self.slideshow_files:
-                return {"status": "error", "error": "No slideshow files to show"}
-            self.slideshow_index = (self.slideshow_index - 1) % len(self.slideshow_files)
-            content_id = list(self.slideshow_files.values())[self.slideshow_index].get("content_id")
-            if not content_id:
-                return {"status": "error", "error": "No content ID found for the file"}
-#            file = list(self.slideshow_files.keys())[self.slideshow_index]
-#            content_id = await self.get_content_id(file)
-#            if not content_id:
-#                return {"status": "error", "error": "No content ID found for the file"}
-            if not await self.select_image(content_id):
-                return {"status": "error", "error": "Failed to display content ID"}
-            return {"status": "success", "shown": content_id}
-        
+            '''
+            deprecated, use POST /api/v1/slideshow/previous
+            '''
+            return await legacy_slideshow_show(self.slideshow.position - 1)
+
         @self.app.post("/show_slideshow_index")
         async def show_slideshow_index(req: self.SlideshowIndexRequest):
-            error = self.art_mode_error()
-            if error:
-                return error
-            if self._sync_pending:
-                asyncio.create_task(self._run_pending_sync())
-            if not self.slideshow_files:
-                return {"status": "error", "error": "No slideshow files to show"}
-            if not isinstance(req.slideshow_index, int):
-                return {"status": "error", "error": "Slideshow index must be an integer"}
-            if req.slideshow_index < 0 or req.slideshow_index >= len(self.slideshow_files):
+            '''
+            deprecated, use POST /api/v1/slideshow/show
+            '''
+            count = len(self.playlist())
+            if count and not 0 <= req.slideshow_index < count:
                 return {"status": "error", "error": "Slideshow index out of range"}
-            self.slideshow_index = req.slideshow_index
-            content_id = list(self.slideshow_files.values())[self.slideshow_index].get("content_id")
-            if not content_id:
-                return {"status": "error", "error": "No content ID found for the file"}
-#            file = list(self.slideshow_files.keys())[self.slideshow_index]
-#            content_id = await self.get_content_id(file)
-#            if not content_id:
-#                return {"status": "error", "error": "No content ID found for the file"}
-            if not await self.select_image(content_id):
-                return {"status": "error", "error": "Failed to display content ID"}
-            return {"status": "success", "shown": content_id}
+            return await legacy_slideshow_show(req.slideshow_index)
 
         @self.app.get("/available_keywords")
         async def available_keywords():
             try:
-                await self.check_file_dict_availability(reload=True)
-                keywords_set = set()
-                for entry in self.tv_files.values():
-                    if "keywords" in entry and entry["keywords"]:
-                        try:
-                            kws = json.loads(entry["keywords"])
-                            if isinstance(kws, list):
-                                keywords_set.update(kws)
-                        except Exception:
-                            continue
-                return {"status": "success", "keywords": sorted(keywords_set)}
+                return {"status": "success", "keywords": await self.all_keywords()}
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
@@ -996,30 +1189,11 @@ class TheFrameController:
         @self.app.get("/list_files")
         async def list_files():
             try:
-                await self.check_file_dict_availability(reload=True)
-                items = []
-                for filename, entry in self.tv_files.items():
-                    raw_kw = entry.get("keywords")
-                    if isinstance(raw_kw, str):
-                        try:
-                            kws = json.loads(raw_kw)
-                        except Exception:
-                            kws = []
-                    elif isinstance(raw_kw, list):
-                        kws = raw_kw
-                    else:
-                        kws = []
-                    items.append({
-                        "file_name": filename,
-                        "content_id": entry.get("content_id"),
-                        "keywords": kws,
-                        "modified": entry.get("modified"),
-                    })
-                items.sort(key=lambda x: x["file_name"].lower())
-                return {"status": "success", "files": items}
+                return {"status": "success", "files": await self.file_items()}
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
+        @self.app.get("/api/v1/thumbnail/{file_name:path}")
         @self.app.get("/thumbnail/{file_name:path}")
         async def thumbnail(file_name: str, size: int = 320):
             if not HAVE_PIL:
@@ -1042,45 +1216,23 @@ class TheFrameController:
 
         @self.app.get("/status")
         async def status():
-            # answered from the monitor's cache, never waits for the TV
+            '''
+            deprecated, use GET /api/v1/status
+            '''
             if self.config_error:
                 return {"status": "error", "error": self.config_error}
-            return {
-                "status": "success",
-                "in_artmode": None if self.monitor.state == 'unknown' else self.monitor.in_artmode,
-                "current_content_id": self.monitor.current_content_id,
-                "sync_pending": self._sync_pending,
-                "file_count": len(self.tv_files),
-                "slideshow_index": self.slideshow_index,
-                "slideshow_count": len(self.slideshow_files),
-                "power_state": self.monitor.state,
-                "power_state_since": self.monitor.since,
-                "last_check": self.monitor.last_check,
-                "art_service_available": self.tv.art_service_available if self.tv is not None else None,
-                "ip_control": "paired" if self.paired_ip_control() else ("unpaired" if self.ip_control else "disabled"),
-                "error": self.monitor.error,
-            }
+            return dict(self.status(), status="success")
 
         @self.app.post("/power_on")
         async def power_on():
-            '''
-            wake the TV: IP Control if paired, else Wake-on-LAN (needs tv_mac and host network)
-            '''
             if self.config_error:
                 return {"status": "error", "error": self.config_error}
             try:
-                if self.paired_ip_control():
-                    method = "ip_control"
-                    async with asyncio.timeout(TV_CALL_TIMEOUT):
-                        await self.ip_control.async_call("power_on")
-                elif self.tv_mac:
-                    method = "wol"
-                    await asyncio.to_thread(send_magic_packet, self.tv_mac)
-                else:
-                    return {"status": "error", "error": "No way to wake the TV: pair IP Control or set tv_mac"}
+                method = await self.wake()
             except Exception as e:
                 return {"status": "error", "error": "power_on failed: {}".format(e)}
-            self.monitor.poke()
+            if method is None:
+                return {"status": "error", "error": "No way to wake the TV: pair IP Control or set tv_mac"}
             return {"status": "success", "method": method}
 
         @self.app.post("/ip_control/pair")
@@ -1096,6 +1248,176 @@ class TheFrameController:
                 return {"status": "error", "error": "pairing failed: {}".format(e)}
             self.monitor.poke()
             return {"status": "success"}
+
+    class ShowRequest(BaseModel):
+        file_name: Optional[str] = None
+        content_id: Optional[str] = None
+
+    class SlideshowUpdate(BaseModel):
+        enabled: Optional[bool] = None
+        interval_minutes: Optional[int] = Field(None, ge=1, le=1440)
+        mode: Optional[Literal['keywords', 'files']] = None
+        keywords: Optional[list[str]] = None
+        files: Optional[list[str]] = None
+        position: Optional[int] = Field(None, ge=-1)
+
+    class SlideshowShowRequest(BaseModel):
+        position: int = Field(ge=0)
+
+    def v1_unavailable(self, need='art'):
+        '''
+        /api/v1 error for commands that need the tv in art mode (need='art') or on (need='on'), or None
+        '''
+        if self.config_error:
+            return api_error(503, "not_configured", self.config_error)
+        if need == 'art' and not self.monitor.in_artmode:
+            return api_error(409, "tv_not_in_art_mode", "TV is not in art mode (power state: {})".format(self.monitor.state))
+        if need == 'on' and not self.monitor.tv_on:
+            return api_error(409, "tv_not_on", "TV is not on (power state: {})".format(self.monitor.state))
+        return None
+
+    def setup_v1_routes(self):
+        '''
+        versioned API used by the integration; errors are HTTP status codes with {"error": {"code", "message"}}
+        '''
+
+        @self.app.exception_handler(RequestValidationError)
+        async def validation_error(request: Request, exc: RequestValidationError):
+            if request.url.path.startswith("/api/v1/"):
+                return api_error(422, "invalid_request", str(exc.errors()))
+            return await request_validation_exception_handler(request, exc)
+
+        @self.app.get("/api/v1/status")
+        async def v1_status():
+            if self.config_error:
+                return api_error(503, "not_configured", self.config_error)
+            return self.status()
+
+        @self.app.get("/api/v1/events")
+        async def v1_events():
+            '''
+            server-sent events: 'status' (whole status, on connect and on every change), 'files' (after a sync)
+            '''
+            return StreamingResponse(self.events.stream(("status", self.status())), media_type="text/event-stream",
+                                     headers={"Cache-Control": "no-cache"})
+
+        @self.app.get("/api/v1/files")
+        async def v1_files():
+            return {"files": await self.file_items()}
+
+        @self.app.get("/api/v1/keywords")
+        async def v1_keywords():
+            return {"keywords": await self.all_keywords()}
+
+        @self.app.post("/api/v1/sync", status_code=202)
+        async def v1_sync():
+            '''
+            start a sync job; it waits as 'queued' until the tv is in art mode. 409 while one is queued or running
+            '''
+            if self.config_error:
+                return api_error(503, "not_configured", self.config_error)
+            job, created = self.request_sync()
+            if not created:
+                return JSONResponse(status_code=409, content={
+                    "error": {"code": "job_conflict", "message": "a sync is already {}".format(job.state)},
+                    "job": job.as_dict()})
+            asyncio.create_task(self.run_sync_job())
+            return {"job": job.as_dict()}
+
+        @self.app.post("/api/v1/show")
+        async def v1_show(req: self.ShowRequest):
+            error = self.v1_unavailable()
+            if error:
+                return error
+            if req.file_name:
+                await self.check_file_dict_availability(reload=True)
+                content_id = self.tv_files.get(req.file_name, {}).get("content_id")
+                if not content_id:
+                    return api_error(404, "not_found", "{} is not uploaded to the TV".format(req.file_name))
+            elif req.content_id:
+                content_id = req.content_id
+            else:
+                return api_error(422, "invalid_request", "file_name or content_id is required")
+            if not await self.select_image(content_id):
+                return api_error(502, "tv_error", "TV did not show {}".format(content_id))
+            self.publish_status()
+            return {"shown": content_id, "file_name": self.current_file()}
+
+        @self.app.get("/api/v1/slideshow")
+        async def v1_slideshow():
+            return dict(self.slideshow.as_dict(), count=len(self.playlist()))
+
+        @self.app.put("/api/v1/slideshow")
+        async def v1_slideshow_update(req: self.SlideshowUpdate):
+            '''
+            change any of enabled, interval_minutes, mode, keywords, files, position; persisted
+            '''
+            changes = req.model_dump(exclude_none=True)
+            if "files" in changes:
+                changes["files"] = list(dict.fromkeys(changes["files"]))
+            self.update_slideshow(**changes)
+            return dict(self.slideshow.as_dict(), count=len(self.playlist()))
+
+        async def v1_slideshow_show(position):
+            error = self.v1_unavailable()
+            if error:
+                return error
+            content_id, error = await self.slideshow_show(position)
+            if error == "empty_slideshow":
+                return api_error(409, "empty_slideshow", "the slideshow has no images uploaded to the TV")
+            if error:
+                return api_error(502, "tv_error", "TV did not show the next image")
+            return {"shown": content_id, "position": self.slideshow.position, "file_name": self.current_file()}
+
+        @self.app.post("/api/v1/slideshow/next")
+        async def v1_slideshow_next():
+            return await v1_slideshow_show(self.slideshow.position + 1)
+
+        @self.app.post("/api/v1/slideshow/previous")
+        async def v1_slideshow_previous():
+            return await v1_slideshow_show(self.slideshow.position - 1)
+
+        @self.app.post("/api/v1/slideshow/show")
+        async def v1_slideshow_show_position(req: self.SlideshowShowRequest):
+            count = len(self.playlist())
+            if count and req.position >= count:
+                return api_error(422, "invalid_request", "position {} is out of range (0-{})".format(req.position, count - 1))
+            return await v1_slideshow_show(req.position)
+
+        @self.app.get("/api/v1/settings")
+        async def v1_settings():
+            error = self.v1_unavailable(need='on')
+            if error:
+                return error
+            try:
+                async with asyncio.timeout(TV_CALL_TIMEOUT):
+                    settings = await self.tv.get_artmode_settings('')
+            except Exception as e:
+                return api_error(502, "tv_error", "TV did not return its art mode settings: {}".format(e))
+            return {"settings": settings}
+
+        @self.app.post("/api/v1/power_on")
+        async def v1_power_on():
+            if self.config_error:
+                return api_error(503, "not_configured", self.config_error)
+            try:
+                method = await self.wake()
+            except Exception as e:
+                return api_error(502, "tv_error", "power_on failed: {}".format(e))
+            if method is None:
+                return api_error(409, "wake_unavailable", "no way to wake the TV: pair IP Control or set tv_mac")
+            return {"method": method}
+
+        @self.app.post("/api/v1/ip_control/pair")
+        async def v1_ip_control_pair():
+            if self.ip_control is None:
+                return api_error(409, "ip_control_disabled", "IP Control is disabled, set the ip_control option")
+            try:
+                await self.ip_control.async_pair()
+            except Exception as e:
+                return api_error(502, "tv_error", "pairing failed: {}".format(e))
+            self.monitor.poke()
+            return {"paired": True}
 
 # Instantiate the controller
 controller = TheFrameController()
