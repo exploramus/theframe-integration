@@ -62,6 +62,28 @@ Checked against version 4.1.4 (released 2026-10-26; 4.0.0 on 2026-10-25).
 - The `SamsungTVAsyncArt` constructor does blocking network I/O: a synchronous REST call for the model year and, on 2024+ models without a token, a synchronous websocket open. Create the client in a worker thread inside the monitor, never at import time or directly on the event loop.
 - WOL stays as fallback (needs `host_network: true`); IP Control `power_on()` is preferred where it works.
 
+**Diagnose results for this TV** (`python -m samsungframetv.diagnose 192.168.178.94 --ipcontrol`, samsungframetv 4.1.4, 2026-10-31, read-only run, TV on in TV mode, not art mode):
+
+| Item | Result |
+|---|---|
+| Model | GQ55LS03BGUXZG, `22_PONTUSM_FTV` → model year 2022; Tizen, wired, 3840×2160 |
+| Art API | 4.3.4.0 (new API, `legacy_art_api` false) |
+| REST | `PowerState` reported (`on`); `TokenAuthSupport` true |
+| Power state | `get_power_state()` → `tv`; `get_artmode` → `off`; `in_artmode()` → false |
+| Art channel | All art requests answered, typically 0.01–0.2 s; thumbnail 1.5 s (JPEG, ~25 KB) |
+| Content | 373 items: `MY-C0008` 185, `MY-C0002` 183, `MY-C0004` 5 |
+| Device features | brightness sensor, motion sensor, colour tone: yes; My Shelf: no |
+| Art settings | brightness 4 (0–10), colour temperature 0 (−5…5), motion sensitivity 2 (1–3), motion timer 15 (off/5/15/30/60/120/240), brightness sensor on |
+| Mattes / filters | 10 matte types (none … squares) with colours; 7 photo filters (None, Aqua, ArtDeco, Ink, Wash, Pastel, Feuve) |
+| TV-native slideshow | off |
+| IP Control (1516) | Port open; pairing works after pressing Allow on the TV (token stored); `get_tv_states` answers in 0.5 s |
+
+Notes:
+- The websocket connection is refused (`ms.channel.timeOut`) until Allow is pressed on the TV; the first run failed this way. No websocket token file was written after Allow, so this 2022 model appears to remember the client by name. The add-on's existing token file still works; re-check when a dev client name is used.
+- IP Control pairing needs someone at the TV as well; without Allow the pairing request times out silently.
+- Not tested (would change TV state): IP Control `power_on()` / `power_off()` / `set_artmode()`, WOL, `upload()`, and power-state behaviour in standby and art mode. Test these in step 2.
+- Full redacted report: `diagnose_report_ipc.json` (not committed).
+
 ### 3.1 TV monitor (add-on starts independently of the TV)
 - Server starts immediately and always answers.
 - Background task tracks TV state with `get_power_state()`: `off` → `standby` → `tv` → `art`; polls with back-off while the TV is off, respects the library's art-service back-off, calls `reset_art_service()` when the TV comes back.
@@ -126,7 +148,7 @@ Key test scenarios: add-on starts with TV off and answers immediately; queued sy
 
 ## 6. Implementation order
 
-0. **Hotfix release of the current add-on** (before anything else): `samsungframetv==4.1.4` from PyPI, imports changed to `samsungframetv`, otherwise unchanged. Test once against the real TV, release, install on the Pi. Run the library's `diagnose` tool once against the TV and record the results.
+0. **Hotfix release of the current add-on** (before anything else): `samsungframetv==4.1.4` from PyPI, imports changed to `samsungframetv`, otherwise unchanged. Test once against the real TV, release, install on the Pi. Run the library's `diagnose` tool once against the TV and record the results. *Code change done (add-on 1.0.17.002, not yet released); diagnose done 2026-10-31, results in 3.0.*
 1. Monorepo layout and CI.
 2. Add-on refactor on `samsungframetv` 4.1.x: TV monitor based on `get_power_state()`, client created off the event loop, library timeouts and back-off, start without the TV, `host_network: true`, config via env; optional IP Control.
 3. Fake TV and the state-based tests (using the library's fixtures as reference).
