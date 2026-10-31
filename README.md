@@ -140,3 +140,7 @@ See [MIGRATION.md](MIGRATION.md) for a step-by-step guide that removes the DOCS.
 After migration, all entities from DOCS.md can be removed. The HomeKit bridge configuration stays — it now exports the new `switch.*` and `number.*` entities directly.
 
 The OneDrive sync via `rclone` still lives in the add-on (`image_sync.sh`). The integration's *Sync Files* button only triggers `/sync_files` (TV ↔ local folder reconciliation). If you want the rclone step to run from HA, keep the `shell_command: image_sync` line, or wrap it with a script.
+
+## License
+
+GPL-3.0, see [LICENSE](LICENSE). The add-on depends on [samsungframetv](https://pypi.org/project/samsungframetv/) (LGPL-3.0).
