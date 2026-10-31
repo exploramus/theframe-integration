@@ -1,0 +1,55 @@
+{
+  "_source": "samsungframetv diagnose report, GQ55LS03BGUXZG (2022), 2026-10-31, ids redacted",
+  "model": "22_PONTUSM_FTV",
+  "model_year": 22,
+  "art_api_version": "4.3.4.0",
+  "get_current": {
+    "event": "get_current_artwork",
+    "request_id": "<uuid-2>",
+    "content_id": "MY_F2796",
+    "matte_id": "none",
+    "portrait_matte_id": "none",
+    "category_id": "MY-C0002",
+    "content_type": "myphoto"
+  },
+  "available_item": {
+    "content_id": "MY_F2796",
+    "category_id": "MY-C0008",
+    "slideshow": "false",
+    "matte_id": "none",
+    "portrait_matte_id": "none",
+    "width": 3840,
+    "height": 2160,
+    "image_date": "2026:07:12 07:01:24",
+    "content_type": "mobile"
+  },
+  "get_artmode_settings": [
+    {
+      "item": "brightness",
+      "value": "4",
+      "min": "0",
+      "max": "10"
+    },
+    {
+      "item": "color_temperature",
+      "value": "0",
+      "min": "-5",
+      "max": "5"
+    },
+    {
+      "item": "motion_sensitivity",
+      "value": "2",
+      "min": "1",
+      "max": "3"
+    },
+    {
+      "item": "motion_timer",
+      "value": "15",
+      "valid_values": "[\"off\", \"5\", \"15\", \"30\", \"60\", \"120\", \"240\"]"
+    },
+    {
+      "item": "brightness_sensor_setting",
+      "value": "on"
+    }
+  ]
+}

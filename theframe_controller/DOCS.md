@@ -43,7 +43,7 @@ Use a separate token file, image folder and `json_path` for this: a sync deletes
 
 Calling `/sync_files` compares the images in the configured folder against what is uploaded on the TV and reconciles the difference — uploading new files, removing deleted ones, and re-uploading modified ones. This operation requires the TV to be on and in Art Mode.
 
-If the TV is off or not in Art Mode when `/sync_files` is called, the sync is queued rather than dropped. The response will be `{"status": "queued"}` instead of `{"status": "success"}`. Any Home Assistant automation that checks this status should handle both values. The queued sync runs automatically as soon as the monitor sees the TV in Art Mode (within about 10 seconds) — no further action is needed.
+If the TV is off or not in Art Mode when `/sync_files` is called, the sync is queued rather than dropped. The response will be `{"status": "queued"}` instead of `{"status": "success"}`. Any Home Assistant automation that checks this status should handle both values. The queued sync runs automatically as soon as the monitor sees the TV in Art Mode (within about 10 seconds) — no further action is needed. A sync that fails (for example a dropped connection) or is cut short because the TV leaves Art Mode also stays queued; after a failure it is retried no sooner than 60 seconds later. If the TV adds an image without confirming the upload, the add-on finds it in My Photos rather than uploading it again.
 
 ### Image sync from OneDrive
 
