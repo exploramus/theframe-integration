@@ -28,7 +28,7 @@ jobs:
         with:
           python-version: "3.13"
       - run: pip install pytest-homeassistant-custom-component
-      - run: pytest tests_ha -o asyncio_mode=auto
+      - run: python -m pytest tests_ha -o asyncio_mode=auto
 
   hassfest:
     name: Integration – hassfest
