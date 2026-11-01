@@ -41,11 +41,14 @@ from samsungframetv.async_art import SamsungTVAsyncArt
 OPTIONS_FILE = os.environ.get("THEFRAME_OPTIONS", "/data/options.json")
 
 POLL_INTERVAL = 10          # seconds between power state checks while the TV is on
+POLL_INTERVAL_EVENTS = 30   # same, while the TV's event connection is open and pushes changes itself
 POLL_INTERVAL_MAX = 30      # back-off limit while the TV does not answer at all
 TV_CALL_TIMEOUT = 30        # outer safety net around TV calls, the library has its own timeouts
 TV_CHECK_TIMEOUT = 15       # power state check; the library's async REST calls have no timeout of their own
 TV_CONNECT_TIMEOUT = 10     # client timeout: sync REST call in the constructor and websocket open
 TV_ON_STATES = ('tv', 'art', 'on')
+# events the TV pushes on the art channel; recorded on a 2022 Frame (GQ55LS03B)
+TV_EVENTS = ('art_mode_changed', 'image_selected', 'go_to_standby', 'wakeup')
 SYNC_RETRY_DELAY = 60       # seconds before a failed sync is retried
 SLIDESHOW_TICK = 5          # seconds between slideshow timer checks
 EVENT_KEEPALIVE = 15        # seconds between keep-alive comments on the event stream
@@ -170,11 +173,12 @@ class TVMonitor:
     endpoints read the cached state and never wait for the TV
     '''
 
-    def __init__(self, mon, interval=POLL_INTERVAL, interval_max=POLL_INTERVAL_MAX):
+    def __init__(self, mon, interval=POLL_INTERVAL, interval_max=POLL_INTERVAL_MAX, interval_events=POLL_INTERVAL_EVENTS):
         self.log = logging.getLogger('Main.'+__class__.__name__)
         self.mon = mon
         self.interval = interval
         self.interval_max = interval_max
+        self.interval_events = interval_events
         self.state = 'unknown'      # off, standby, tv, art, on (art mode unknown), unknown before the first check
         self.since = None
         self.last_check = None
@@ -189,6 +193,43 @@ class TVMonitor:
     @property
     def tv_on(self):
         return self.state in TV_ON_STATES
+
+    @property
+    def events_connected(self):
+        '''
+        True while the art channel is open, so the TV pushes art mode, image and standby changes
+        '''
+        return self.mon.tv is not None and self.mon.tv.is_alive()
+
+    def listen(self, tv):
+        for name in TV_EVENTS:
+            tv.set_callback(name, self.on_tv_event)
+
+    def on_tv_event(self, event, response):
+        '''
+        update the cached state the moment the TV reports a change; the checks remain as a safety net
+        '''
+        try:
+            data = json.loads(response.get('data') or '{}')
+        except (AttributeError, ValueError):
+            return
+        name = data.get('event')
+        self.log.debug('TV event: {}'.format(data))
+        if name == 'art_mode_changed':
+            self.set_state('art' if data.get('status') == 'on' else 'tv')
+            if not self.in_artmode:
+                self.current_content_id = None
+            else:
+                self.poke()             # the check fetches the current image and starts a queued sync
+        elif name == 'image_selected' and self.in_artmode:
+            # the TV also announces images while in standby; only art mode shows them
+            self.current_content_id = data.get('content_id') or self.current_content_id
+        elif name == 'go_to_standby':
+            self.set_state('standby')
+            self.current_content_id = None
+        elif name == 'wakeup':
+            self.poke()
+        self.mon.publish_status()
 
     def poke(self):
         '''
@@ -215,7 +256,7 @@ class TVMonitor:
         '''
         if self.state in ('off', 'unknown') and self.state == previous:
             return min(delay * 2, self.interval_max)
-        return self.interval
+        return self.interval_events if self.events_connected else self.interval
 
     async def check(self):
         '''
@@ -226,6 +267,7 @@ class TVMonitor:
             try:
                 async with asyncio.timeout(TV_CALL_TIMEOUT):
                     self.mon.tv = await asyncio.to_thread(self.mon.create_tv)
+                self.listen(self.mon.tv)
             except Exception as e:
                 self.error = 'cannot create TV client: {}'.format(e)
                 self.log.warning(self.error)
@@ -986,6 +1028,7 @@ class TheFrameController:
             "power_state_since": self.monitor.since,
             "last_check": self.monitor.last_check,
             "art_service_available": self.tv.art_service_available if self.tv is not None else None,
+            "tv_events": self.monitor.events_connected,
             "ip_control": "paired" if self.paired_ip_control() else ("unpaired" if self.ip_control else "disabled"),
             "error": self.monitor.error,
             "event_clients": len(self.events.queues),

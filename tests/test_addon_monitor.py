@@ -99,3 +99,47 @@ def test_status_reports_connected_event_clients(addon):
     assert addon.client.get("/api/v1/status").json()["event_clients"] == 0
     addon.controller.events.queues.add(asyncio.Queue())
     assert addon.client.get("/api/v1/status").json()["event_clients"] == 1
+
+
+def test_tv_events_update_the_status_at_once(addon):
+    addon.check()
+    tv, monitor = addon.tv, addon.controller.monitor
+    events = []
+    queue = asyncio.Queue()
+    addon.controller.events.queues.add(queue)
+
+    tv.push("image_selected", content_id="MY_F7", matte_id="none", is_shown="Yes")
+    assert monitor.current_content_id == "MY_F7"
+    tv.push("art_mode_changed", status="off")
+    assert (monitor.state, monitor.current_content_id) == ("tv", None)
+    tv.push("art_mode_changed", status="on")
+    assert monitor.state == "art"
+    tv.push("go_to_standby")
+    assert monitor.state == "standby"
+    tv.push("wakeup")
+    assert monitor._wakeup.is_set()                         # checks again right away
+
+    while not queue.empty():
+        events.append(queue.get_nowait())
+    assert [data["power_state"] for _, data in events] == ["art", "tv", "art", "standby"]
+
+
+def test_art_mode_event_triggers_a_check_and_images_count_only_in_art_mode(addon):
+    addon.check()
+    monitor = addon.controller.monitor
+    addon.tv.push("go_to_standby")
+    addon.tv.push("image_selected", content_id="MY_F8", is_shown="Yes")     # sent in standby too
+    assert monitor.current_content_id is None
+
+    monitor._wakeup.clear()
+    addon.tv.push("art_mode_changed", status="on")
+    assert monitor._wakeup.is_set()     # the check fetches the current image and runs a queued sync
+
+
+def test_checks_less_often_while_the_tv_pushes_events(addon):
+    addon.check()
+    monitor = addon.controller.monitor
+    assert addon.client.get("/api/v1/status").json()["tv_events"] is True
+    assert monitor.next_delay("art", 10) == 30
+    addon.tv.connected = False
+    assert monitor.next_delay("art", 10) == 10

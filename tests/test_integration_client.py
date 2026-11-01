@@ -16,6 +16,7 @@ def served(addon):
     """the add-on app with the fake TV on a free local port, monitor checking every 50 ms"""
     addon.controller.monitor.interval = 0.05
     addon.controller.monitor.interval_max = 0.2
+    addon.controller.monitor.interval_events = 0.05
     server = uvicorn.Server(uvicorn.Config(addon.controller.app, host="127.0.0.1", port=0,
                                            log_level="warning", timeout_graceful_shutdown=1))
     thread = threading.Thread(target=server.run, daemon=True)
