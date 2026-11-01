@@ -243,3 +243,17 @@ def test_updating_the_active_collection_applies_it(addon):
     addon.client.put("/api/v1/collections/Mix", json={"keywords": ["Sea", "Forest"]})
     slideshow = addon.client.get("/api/v1/slideshow").json()
     assert (slideshow["collection"], slideshow["keywords"], slideshow["count"]) == ("Mix", ["Forest", "Sea"], 2)
+
+
+def test_thumbnail_only_serves_files_in_the_image_folder(addon, tmp_path):
+    (tmp_path / "secret.txt").write_text("not an image")
+    (addon.images / "sub").mkdir()
+    (addon.images / "sub" / "x.jpg").write_bytes(b"x")
+    (addon.images / "link.jpg").symlink_to(tmp_path / "secret.txt")
+    write_image(addon.images, "a.jpg")
+    for name in ["../secret.txt", "..%2Fsecret.txt", "%2e%2e/secret.txt", str(tmp_path / "secret.txt"),
+                 "sub/x.jpg", "link.jpg", "..", "."]:
+        response = addon.client.get("/api/v1/thumbnail/" + name)
+        assert response.status_code == 404, name
+    assert addon.controller.image_file("a.jpg") == str((addon.images / "a.jpg").resolve())
+    assert addon.client.get("/api/v1/thumbnail/a.jpg").json()["error"]["code"] == "invalid_image"   # found, but a stand-in
