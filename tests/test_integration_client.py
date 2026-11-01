@@ -67,6 +67,15 @@ def test_client_drives_the_addon_over_http(served, client_api):
                 await api.show_file("a.jpg")
             assert (error.value.code, error.value.status) == ("tv_not_in_art_mode", 409)
 
+            saved = await api.save_collection("Sea (2026) & more", keywords=["Sea"])
+            assert (saved["name"], saved["count"]) == ("Sea (2026) & more", 1)
+            await api.slideshow_update(collection="Sea (2026) & more")
+            pushed = await next_status(events, lambda s: s["slideshow"]["collection"] == "Sea (2026) & more")
+            assert pushed["collections"] == ["Sea (2026) & more"]
+            assert [c["name"] for c in await api.collections()] == ["Sea (2026) & more"]
+            await api.delete_collection("Sea (2026) & more")
+            assert await api.collections() == []
+
             async with session.get(api.thumbnail_url("a.jpg")) as response:
                 assert response.status == 422           # routed to the add-on; the stand-in image is not a real JPEG
             await events.aclose()

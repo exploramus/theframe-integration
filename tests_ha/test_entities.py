@@ -124,3 +124,45 @@ async def test_interval_select_for_apple_home(hass, setup_entry, addon):
     assert calls(addon, "PUT", "/api/v1/slideshow") == [{"interval_minutes": 10}]
     assert hass.states.get("select.the_frame_slideshow_interval").state == "10 min"
     assert hass.states.get("number.the_frame_slideshow_interval").state == "10.0"
+
+
+async def test_collection_select_loads_a_collection(hass, setup_entry, addon):
+    state = hass.states.get("select.the_frame_collection")
+    assert state.attributes["options"] == ["Ameland", "Sea and Sky"]
+    assert state.state == "unknown"             # slideshow set by hand, no collection active
+
+    addon.put(f"{BASE}/api/v1/slideshow", json=dict(STATUS["slideshow"], collection="Ameland", mode="files",
+                                                    keywords=[], files=["b.jpg", "a.jpg"]))
+    await hass.services.async_call("select", "select_option",
+                                   {"entity_id": "select.the_frame_collection", "option": "Ameland"}, blocking=True)
+    assert calls(addon, "PUT", "/api/v1/slideshow") == [{"collection": "Ameland"}]
+    assert hass.states.get("select.the_frame_collection").state == "Ameland"
+    assert hass.states.get("switch.the_frame_art_sea").state == "off"      # a playlist collection
+
+
+async def test_save_and_delete_collection_actions(hass, setup_entry, addon):
+    addon.put(f"{BASE}/api/v1/collections/Sea%20and%20Sky",
+              json={"name": "Sea and Sky", "mode": "keywords", "keywords": ["Sea", "Sky"], "count": 2})
+    addon.delete(f"{BASE}/api/v1/collections/Sea%20and%20Sky", json={"deleted": "Sea and Sky"})
+
+    await hass.services.async_call("theframe", "save_collection",
+                                   {"name": " Sea and Sky ", "keywords": ["Sea", "Sky"]}, blocking=True)
+    await hass.services.async_call("theframe", "save_collection", {"name": "Sea and Sky"}, blocking=True)
+    await hass.services.async_call("theframe", "delete_collection", {"name": "Sea and Sky"}, blocking=True)
+
+    assert calls(addon, "PUT", "/api/v1/collections/Sea%20and%20Sky") == [{"keywords": ["Sea", "Sky"]}, {}]
+    assert len(calls(addon, "DELETE", "/api/v1/collections/Sea%20and%20Sky")) == 1
+
+
+async def test_collection_select_is_unavailable_without_collections(hass, aioclient_mock):
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    aioclient_mock.get(f"{BASE}/api/v1/status", json=dict(STATUS, collections=[]))
+    aioclient_mock.get(f"{BASE}/api/v1/keywords", json={"keywords": []})
+    aioclient_mock.get(f"{BASE}/api/v1/files", json={"files": []})
+    aioclient_mock.get(f"{BASE}/api/v1/events", text="")
+    entry = MockConfigEntry(domain="theframe", data={"base_url": BASE})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get("select.the_frame_collection").state == "unavailable"

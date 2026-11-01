@@ -16,6 +16,7 @@ The add-on works on its own through its API; the integration needs the add-on.
 - **Image sync** — new images in your folder appear on the TV, changed ones are re-uploaded, deleted ones removed. Runs in the background; if the TV is off the sync waits for Art Mode.
 - **Keyword slideshows** — one switch per keyword from your images' metadata (Photos, Lightroom); turn on the ones you want to see.
 - **Playlists** — an ordered list of images with `theframe.play_files`.
+- **Collections** — named presets (a keyword set or a playlist), picked from one select; one tile in Apple Home instead of a switch per keyword.
 - **Real-time status** — Art Mode, power state and the current image within about a second, pushed by the TV.
 - **Live image** of what the TV shows, for dashboards.
 - **Media browser** — browse your images with thumbnails, by keyword, and show one on the TV.
@@ -36,6 +37,7 @@ Keep both at the same version; updates arrive through the add-on store and HACS.
 
 | Entity | Purpose |
 | --- | --- |
+| `select.the_frame_collection` | Load a collection (named keyword set or playlist); empty while the slideshow was changed by hand |
 | `switch.the_frame_slideshow` | Slideshow timer on/off |
 | `switch.the_frame_art_<keyword>` | One per keyword; the slideshow shows images with any active keyword. Created automatically; umlauts become `ae`/`oe`/`ue` (`Blüte` → `bluete`) |
 | `number.the_frame_slideshow_interval` | Minutes per image (1–30) |
@@ -51,7 +53,7 @@ Keep both at the same version; updates arrive through the add-on store and HACS.
 | `binary_sensor.the_frame_sync_pending` | A sync is waiting for Art Mode |
 | `media_player.the_frame_player` | Target for **Play** in the media browser; next/previous |
 
-Actions: `theframe.show_file`, `theframe.show_image`, `theframe.sync_files`, `theframe.next`, `theframe.previous`, `theframe.play_files` (details in **Developer Tools → Actions**).
+Actions: `theframe.show_file`, `theframe.show_image`, `theframe.sync_files`, `theframe.next`, `theframe.previous`, `theframe.play_files`, `theframe.save_collection`, `theframe.delete_collection` (details in **Developer Tools → Actions**).
 
 ## Slideshows
 
@@ -62,7 +64,31 @@ The slideshow is either in **keyword mode** or in **playlist mode**; switching i
 
 In both modes the slideshow switch, the interval, the next/previous buttons and the media player work the same way. The timer pauses outside Art Mode and during a sync.
 
-Playlists fit well into scripts:
+### Collections
+
+A collection is a named slideshow: a set of keywords or a playlist. Pick one with `select.the_frame_collection` and the slideshow loads it, starting at its first image. Changing keywords or calling `play_files` by hand leaves the collection (the select shows nothing). Collections are kept by the add-on and survive restarts.
+
+Save the current slideshow under a name, or give keywords or files directly:
+
+```yaml
+action: theframe.save_collection
+data:
+  name: Sea and Sky
+  keywords: [Himmel, ShoreShades]
+```
+
+```yaml
+action: theframe.save_collection
+data:
+  name: Ameland
+  file_names: ["DSC_3218.jpeg", "DSC_3288 (1).jpeg", "IMG_2809.jpeg"]
+```
+
+Saving under an existing name replaces the collection; `theframe.delete_collection` removes one.
+
+### Playlists in scripts
+
+For one-off playlists, `play_files` also fits into scripts:
 
 ```yaml
 script:
@@ -94,7 +120,7 @@ script:
 
 - **Hide keywords:** **Settings → Devices & Services → The Frame → Configure**, enter keywords to hide (e.g. `TheFrame, exported`). Their switches and media browser folders disappear; the add-on's data is unchanged.
 - **Change the add-on URL:** **⋮ → Reconfigure** on the integration; entities and history are kept.
-- **Apple Home:** expose `switch.the_frame_slideshow`, the keyword switches you want and `select.the_frame_slideshow_interval` in the HomeKit bridge.
+- **Apple Home:** expose `select.the_frame_collection`, `switch.the_frame_slideshow`, `select.the_frame_slideshow_interval` and the next/previous buttons in the HomeKit bridge. Apple Home shows each select as one tile. Leave the keyword switches out and put the combinations you want into collections instead.
 
 A starter dashboard is in [`dashboards/theframe.yaml`](dashboards/theframe.yaml); its header explains how to add it. Replace the keyword switches with your own.
 

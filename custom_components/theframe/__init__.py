@@ -19,8 +19,10 @@ from .const import (
     DOMAIN,
     PLATFORMS,
     SERVICE_NEXT,
+    SERVICE_DELETE_COLLECTION,
     SERVICE_PLAY_FILES,
     SERVICE_PREVIOUS,
+    SERVICE_SAVE_COLLECTION,
     SERVICE_SHOW_FILE,
     SERVICE_SHOW_IMAGE,
     SERVICE_SYNC_FILES,
@@ -38,6 +40,16 @@ _LOGGER = logging.getLogger(__name__)
 
 SHOW_FILE_SCHEMA = vol.Schema({vol.Required("file_name"): cv.string})
 SHOW_IMAGE_SCHEMA = vol.Schema({vol.Required("content_id"): cv.string})
+# names become part of the add-on's URL path, so no slashes
+COLLECTION_NAME = vol.All(cv.string, vol.Strip, vol.Length(min=1, max=60), vol.Match(r"^[^/]+$"))
+SAVE_COLLECTION_SCHEMA = vol.Schema(
+    {
+        vol.Required("name"): COLLECTION_NAME,
+        vol.Exclusive("keywords", "content"): vol.All(cv.ensure_list, [cv.string]),
+        vol.Exclusive("file_names", "content"): vol.All(cv.ensure_list, [cv.string]),
+    }
+)
+DELETE_COLLECTION_SCHEMA = vol.Schema({vol.Required("name"): COLLECTION_NAME})
 PLAY_FILES_SCHEMA = vol.Schema(
     {
         vol.Required("file_names"): vol.All(cv.ensure_list, [cv.string]),
@@ -92,6 +104,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 SERVICE_NEXT,
                 SERVICE_PREVIOUS,
                 SERVICE_PLAY_FILES,
+                SERVICE_SAVE_COLLECTION,
+                SERVICE_DELETE_COLLECTION,
             ):
                 hass.services.async_remove(DOMAIN, svc)
     return unloaded
@@ -160,9 +174,29 @@ def _register_services(
             except TheFrameApiError as err:
                 _LOGGER.error("play_files: initial show failed: %s", err)
 
+    async def _save_collection(call: ServiceCall) -> None:
+        """Save a named preset: the given keywords or files, otherwise the current slideshow."""
+        content = {}
+        if "keywords" in call.data:
+            content["keywords"] = call.data["keywords"]
+        elif "file_names" in call.data:
+            content["files"] = call.data["file_names"]
+        try:
+            await api.save_collection(call.data["name"], **content)
+        except TheFrameApiError as err:
+            _LOGGER.error("save_collection failed: %s", err)
+
+    async def _delete_collection(call: ServiceCall) -> None:
+        try:
+            await api.delete_collection(call.data["name"])
+        except TheFrameApiError as err:
+            _LOGGER.error("delete_collection failed: %s", err)
+
     hass.services.async_register(DOMAIN, SERVICE_SHOW_FILE, _show_file, SHOW_FILE_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_SHOW_IMAGE, _show_image, SHOW_IMAGE_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_SYNC_FILES, _sync)
     hass.services.async_register(DOMAIN, SERVICE_NEXT, _next)
     hass.services.async_register(DOMAIN, SERVICE_PREVIOUS, _prev)
     hass.services.async_register(DOMAIN, SERVICE_PLAY_FILES, _play_files, PLAY_FILES_SCHEMA)
+    hass.services.async_register(DOMAIN, SERVICE_SAVE_COLLECTION, _save_collection, SAVE_COLLECTION_SCHEMA)
+    hass.services.async_register(DOMAIN, SERVICE_DELETE_COLLECTION, _delete_collection, DELETE_COLLECTION_SCHEMA)

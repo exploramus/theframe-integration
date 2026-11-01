@@ -24,6 +24,8 @@ SERVICE_SYNC_FILES = "sync_files"
 SERVICE_NEXT = "next"
 SERVICE_PREVIOUS = "previous"
 SERVICE_PLAY_FILES = "play_files"
+SERVICE_SAVE_COLLECTION = "save_collection"
+SERVICE_DELETE_COLLECTION = "delete_collection"
 
 # Coordinator data keys.
 DATA_STATUS = "status"

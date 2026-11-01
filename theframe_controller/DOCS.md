@@ -61,7 +61,9 @@ The add-on owns the slideshow and its timer:
 - **Keyword mode** shows every uploaded image that has any of the selected keywords.
 - **Playlist mode** shows an ordered list of file names (the integration's `theframe.play_files` action).
 
-Interval, on/off, mode, keywords or playlist and the current position are saved and survive restarts. The slideshow stores file names and looks up the TV's content ID when it shows an image, so re-uploading a changed file does not break it. The timer pauses outside Art Mode and while a sync is running.
+**Collections** are named presets of either kind (a keyword set or a playlist). Loading a collection sets the slideshow to it, starting at its first image; changing keywords or files directly leaves the collection. The integration shows them as one select.
+
+Interval, on/off, mode, keywords or playlist, the active collection, the collections and the current position are saved and survive restarts. The slideshow stores file names and looks up the TV's content ID when it shows an image, so re-uploading a changed file does not break it. The timer pauses outside Art Mode and while a sync is running.
 
 ### Waking the TV and IP Control
 
@@ -108,7 +110,8 @@ max_exceeded: silent
 | `power_state` | `off`, `standby`, `tv`, `art`, `on`, or `unknown` before the first check |
 | `current_content_id`, `current_file` | Image shown in Art Mode |
 | `job` | The current or last sync: `state` (`queued`, `running`, `done`), `total`, `done`, `attempts`, `error` |
-| `slideshow` | Slideshow settings and the number of images in it (`count`) |
+| `slideshow` | Slideshow settings, the active `collection` and the number of images in it (`count`) |
+| `collections` | Names of the saved collections |
 | `tv_events` | `true` while the TV's event connection is open |
 | `event_clients` | Connected event stream clients; `1` when the integration is connected, `0` means it falls back to polling every 60 seconds |
 | `art_service_available` | `false` while the TV's art service stopped answering and requests pause briefly |
@@ -134,7 +137,9 @@ The integration uses the versioned API under `/api/v1`. Its full description is 
 | `GET /api/v1/files`, `GET /api/v1/keywords` | Uploaded files with keywords; all keywords |
 | `POST /api/v1/sync` | Start a sync job: `202` with the job; `409` while one is queued or running |
 | `POST /api/v1/show` | Show `{"file_name": "..."}` or `{"content_id": "..."}` |
-| `GET`, `PUT /api/v1/slideshow` | Slideshow settings: `enabled`, `interval_minutes`, `mode` (`keywords` or `files`), `keywords`, `files`, `position` |
+| `GET`, `PUT /api/v1/slideshow` | Slideshow settings: `enabled`, `interval_minutes`, `mode` (`keywords` or `files`), `keywords`, `files`, `position`; `{"collection": "name"}` loads a collection |
+| `GET /api/v1/collections` | Collections with mode, keywords or files and the number of images |
+| `PUT`, `DELETE /api/v1/collections/{name}` | Save a collection (`{"keywords": [...]}`, `{"files": [...]}`, or `{}` for the current slideshow); delete one |
 | `POST /api/v1/slideshow/next`, `/previous`, `/show` | Step through the slideshow, or show `{"position": n}` |
 | `GET /api/v1/settings` | The TV's Art Mode settings (brightness, colour temperature, motion sensor) |
 | `POST /api/v1/power_on` | Switch the TV on (IP Control or Wake-on-LAN) |
