@@ -788,6 +788,19 @@ class TheFrameController:
             await self.tv.delete_list(content_ids)
             await self.sync_file_list()
 
+    def image_file(self, name):
+        '''
+        path of an image file named in a request, or None; only files directly in the image folder,
+        resolving symlinks and '..', so a request cannot read anything else
+        '''
+        if not self.folder:
+            return None
+        folder = os.path.realpath(self.folder)
+        path = os.path.realpath(os.path.join(folder, name))
+        if os.path.dirname(path) != folder or not os.path.isfile(path):
+            return None
+        return path
+
     def get_last_updated(self, filename):
         '''
         get last updated timestamp for file
@@ -1267,8 +1280,8 @@ class TheFrameController:
         async def v1_thumbnail(file_name: str, size: int = 320):
             if not HAVE_PIL:
                 return api_error(501, "not_available", "Pillow is not installed")
-            path = os.path.join(self.folder, os.path.basename(file_name))
-            if not os.path.isfile(path):
+            path = self.image_file(file_name)
+            if path is None:
                 return api_error(404, "not_found", "{} is not in the image folder".format(file_name))
             size = max(64, min(int(size), 1024))
             try:
