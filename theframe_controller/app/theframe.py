@@ -481,7 +481,8 @@ class TheFrameController:
                 config = json.load(config_file)
         except Exception as e:
             config = {}
-            self.config_error = f"Failed to load configuration from {options_file}: {e}"
+            self.log.error("cannot read %s: %s", options_file, e)
+            self.config_error = f"Failed to load configuration from {options_file}, see the add-on log"
         self.tv_ip = config.get("tv_ip")
         if not self.tv_ip and not self.config_error:
             self.config_error = f"tv_ip is not set in {options_file}"
@@ -1291,7 +1292,8 @@ class TheFrameController:
                     buf = io.BytesIO()
                     img.save(buf, format="JPEG", quality=80)
             except Exception as e:
-                return api_error(422, "invalid_image", "{} cannot be read as an image: {}".format(file_name, e))
+                self.log.warning("thumbnail: cannot read %s: %s", file_name, e)
+                return api_error(422, "invalid_image", "{} cannot be read as an image".format(file_name))
             return Response(content=buf.getvalue(), media_type="image/jpeg",
                             headers={"Cache-Control": "public, max-age=86400"})
 
@@ -1310,7 +1312,8 @@ class TheFrameController:
                 await self.get_api_version()
                 await self.pil.initialize()
             except Exception as e:
-                return api_error(502, "tv_error", "reconcile failed: {}".format(e))
+                self.log.warning("reconcile failed: %s", e)
+                return api_error(502, "tv_error", "reconcile failed, see the add-on log")
             self.publish_status()
             return {"file_count": len(self.tv_files)}
 
@@ -1323,7 +1326,8 @@ class TheFrameController:
                 async with asyncio.timeout(TV_CALL_TIMEOUT):
                     settings = await self.tv.get_artmode_settings('')
             except Exception as e:
-                return api_error(502, "tv_error", "TV did not return its art mode settings: {}".format(e))
+                self.log.warning("TV did not return its art mode settings: %s", e)
+                return api_error(502, "tv_error", "TV did not return its art mode settings")
             return {"settings": settings}
 
         @self.app.post("/api/v1/power_on")
@@ -1333,7 +1337,8 @@ class TheFrameController:
             try:
                 method = await self.wake()
             except Exception as e:
-                return api_error(502, "tv_error", "power_on failed: {}".format(e))
+                self.log.warning("power_on failed: %s", e)
+                return api_error(502, "tv_error", "power_on failed, see the add-on log")
             if method is None:
                 return api_error(409, "wake_unavailable", "no way to wake the TV: pair IP Control or set tv_mac")
             return {"method": method}
@@ -1345,7 +1350,8 @@ class TheFrameController:
             try:
                 await self.ip_control.async_pair()
             except Exception as e:
-                return api_error(502, "tv_error", "pairing failed: {}".format(e))
+                self.log.warning("IP Control pairing failed: %s", e)
+                return api_error(502, "tv_error", "pairing failed, see the add-on log")
             self.monitor.poke()
             return {"paired": True}
 

@@ -52,7 +52,7 @@ class ThumbnailView(HomeAssistantView):
                 )
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             _LOGGER.debug("thumbnail proxy failed for %s: %s", file_name, err)
-            return web.Response(status=502, text=str(err))
+            return web.Response(status=502, text="add-on not reachable")
 
 
 def register_views(hass: HomeAssistant) -> None:
