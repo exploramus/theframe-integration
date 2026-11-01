@@ -68,7 +68,7 @@ def test_client_drives_the_addon_over_http(served, client_api):
             assert (error.value.code, error.value.status) == ("tv_not_in_art_mode", 409)
 
             async with session.get(api.thumbnail_url("a.jpg")) as response:
-                assert response.status in (200, 500)    # routed to the add-on; the stand-in image is not a real JPEG
+                assert response.status == 422           # routed to the add-on; the stand-in image is not a real JPEG
             await events.aclose()
 
     asyncio.run(scenario())

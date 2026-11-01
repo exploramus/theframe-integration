@@ -6,8 +6,7 @@
 # It also includes PIL for image processing if available.
 # This code is designed to run in a Home Assistant environment, where it can be used as an add-on.
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from typing import Literal, Optional
@@ -508,7 +507,6 @@ class TheFrameController:
         if self.json_path and os.path.isfile(self.json_path):
             with contextlib.suppress(Exception):
                 self.tv_files = self.read_uploaded_files(self.json_path)
-        self.setup_routes()
         self.setup_v1_routes()
 
     def paired_ip_control(self):
@@ -519,33 +517,6 @@ class TheFrameController:
         create the TV client; blocking (REST call and possibly a websocket open), run in a worker thread
         '''
         return SamsungTVAsyncArt(host=self.tv_ip, port=self.port, token_file=self.token_file, timeout=TV_CONNECT_TIMEOUT)
-
-    def art_mode_error(self):
-        '''
-        error response for commands that need art mode, or None if the TV is in art mode
-        '''
-        if self.config_error:
-            return {"status": "error", "error": self.config_error}
-        if not self.monitor.in_artmode:
-            return {"status": "error", "error": "TV is not in art mode"}
-        return None
-
-    class ShowImageRequest(BaseModel):
-        content_id: str
-
-    class ShowFileRequest(BaseModel):
-        file_name: str
-
-    class SlideshowInitializeRequest(BaseModel):
-        keyword_list: list
-        slideshow_index: int
-
-    class SlideshowIndexRequest(BaseModel):
-        slideshow_index: int
-
-    class SlideshowFilesRequest(BaseModel):
-        file_names: list[str]
-        slideshow_index: int = 0
 
     async def get_api_version(self):
             '''
@@ -930,7 +901,11 @@ class TheFrameController:
                 job.state = 'queued'
                 job.error = str(e)
                 self._sync_retry_after = time.monotonic() + SYNC_RETRY_DELAY
-            job.ran.set()
+            except asyncio.CancelledError:
+                job.state = 'queued'        # e.g. add-on shutting down; runs again next time
+                raise
+            finally:
+                job.ran.set()
         self.publish_status()
         self.events.publish('files', {'file_count': len(self.tv_files)})
 
@@ -1024,9 +999,6 @@ class TheFrameController:
             "current_file": self.current_file(),
             "sync_pending": self.sync_pending,
             "file_count": len(self.tv_files),
-            # legacy meaning: position of the next image to show
-            "slideshow_index": (self.slideshow.position + 1) % count if count else 0,
-            "slideshow_count": count,
             "slideshow": dict(self.slideshow.as_dict(), count=count),
             "job": self.job.as_dict() if self.job is not None else None,
             "power_state": self.monitor.state,
@@ -1084,229 +1056,6 @@ class TheFrameController:
         self.monitor.poke()
         return method
 
-    def setup_routes(self):
-
-        @self.app.post("/sync_files")
-        async def sync_files():
-            '''
-            deprecated, use POST /api/v1/sync; waits for the sync instead of returning a job
-            '''
-            if self.config_error:
-                return {"status": "error", "error": self.config_error}
-            job, _ = self.request_sync()
-            if job.state == 'running':
-                await job.ran.wait()
-            else:
-                await self.run_sync_job()       # no-op unless the tv is in art mode
-            if job.state == 'done':
-                return {"status": "success", "files": self.tv_files}
-            return {"status": "queued", "message": "sync queued, it runs when the TV is in art mode"}
-
-        @self.app.post("/reconcile_files")
-        async def reconcile_files():
-            if not HAVE_PIL:
-                return {"status": "error", "error": "PIL is not installed"}
-            error = self.art_mode_error()
-            if error:
-                return error
-            try:
-                await self.get_api_version()
-                await self.pil.initialize()
-                return {"status": "success", "files": self.tv_files}
-            except Exception as e:
-                return {"status": "error", "error": str(e)}
-
-        @self.app.post("/refresh_files")
-        async def refresh_files():
-            try:
-                await self.check_file_dict_availability(reload=True)
-                return {"status": "success", "files": self.tv_files}
-            except Exception as e:
-                return {"status": "error", "error": str(e)}
-
-        @self.app.post("/show_image")
-        async def show_image(req: self.ShowImageRequest):
-            error = self.art_mode_error()
-            if error:
-                return error
-            if not await self.select_image(req.content_id):
-                raise RuntimeError(f"Failed to display content_id {req.content_id}")
-            return {"status": "success", "shown": req.content_id}
-
-        @self.app.post("/show_file")
-        async def show_file(req: self.ShowFileRequest):
-            error = self.art_mode_error()
-            if error:
-                return error
-            content_id = await self.get_content_id(req.file_name)
-            if not content_id:
-                return {"status": "error", "error": "Content ID not found"}
-            if not await self.select_image(content_id):
-                return {"status": "error", "error": "Failed to display content ID"}
-            return {"status": "success", "shown": content_id}
-
-        @self.app.post("/initialize_slideshow")
-        async def initialize_slideshow(req: self.SlideshowInitializeRequest):
-            '''
-            deprecated, use PUT /api/v1/slideshow; keyword slideshow, index is the next image to show
-            '''
-            if not req.keyword_list:
-                return {"status": "error", "error": "No slideshow keywords to show"}
-            await self.check_file_dict_availability(reload=True)
-            wanted = set(req.keyword_list)
-            matched = {k: v for k, v in self.tv_files.items() if wanted.intersection(self.file_keywords(v))}
-            self.log.info(
-                "initialize_slideshow: %d/%d files matched keywords=%s",
-                len(matched), len(self.tv_files), req.keyword_list,
-            )
-            if not matched:
-                # keep the running slideshow instead of wiping it for a filter without matches
-                return {"status": "error", "error": "No valid slideshow files found"}
-            index = req.slideshow_index if 0 <= req.slideshow_index < len(matched) else 0
-            self.update_slideshow('/initialize_slideshow (deprecated)', mode='keywords', keywords=list(req.keyword_list), position=index - 1)
-            return {"status": "success", "slideshow": matched, "index": index}
-
-        @self.app.post("/initialize_slideshow_files")
-        async def initialize_slideshow_files(req: self.SlideshowFilesRequest):
-            '''
-            deprecated, use PUT /api/v1/slideshow; ordered playlist of file names (curated slideshow)
-            files not uploaded to the tv are skipped and reported in "missing"; duplicates are collapsed
-            '''
-            if not req.file_names:
-                return {"status": "error", "error": "No file names provided"}
-            await self.check_file_dict_availability(reload=True)
-            accepted = list(dict.fromkeys(f for f in req.file_names if f in self.tv_files))
-            missing = [f for f in req.file_names if f not in self.tv_files]
-            if not accepted:
-                return {
-                    "status": "error",
-                    "error": "None of the provided files are uploaded to the TV",
-                    "missing": missing,
-                }
-            index = req.slideshow_index if 0 <= req.slideshow_index < len(accepted) else 0
-            self.update_slideshow('/initialize_slideshow_files (deprecated)', mode='files', files=accepted, position=index - 1)
-            return {"status": "success", "count": len(accepted), "missing": missing, "index": index}
-
-        async def legacy_slideshow_show(position):
-            error = self.art_mode_error()
-            if error:
-                return error
-            content_id, error = await self.slideshow_show(position)
-            if error == 'empty_slideshow':
-                return {"status": "error", "error": "No slideshow files to show"}
-            if error:
-                return {"status": "error", "error": "Failed to display content ID"}
-            return {"status": "success", "shown": content_id}
-
-        @self.app.post("/show_slideshow_next")
-        async def show_slideshow_next():
-            '''
-            deprecated, use POST /api/v1/slideshow/next
-            '''
-            return await legacy_slideshow_show(self.slideshow.position + 1)
-
-        @self.app.post("/show_slideshow_previous")
-        async def show_slideshow_previous():
-            '''
-            deprecated, use POST /api/v1/slideshow/previous
-            '''
-            return await legacy_slideshow_show(self.slideshow.position - 1)
-
-        @self.app.post("/show_slideshow_index")
-        async def show_slideshow_index(req: self.SlideshowIndexRequest):
-            '''
-            deprecated, use POST /api/v1/slideshow/show
-            '''
-            count = len(self.playlist())
-            if count and not 0 <= req.slideshow_index < count:
-                return {"status": "error", "error": "Slideshow index out of range"}
-            return await legacy_slideshow_show(req.slideshow_index)
-
-        @self.app.get("/available_keywords")
-        async def available_keywords():
-            try:
-                return {"status": "success", "keywords": await self.all_keywords()}
-            except Exception as e:
-                return {"status": "error", "error": str(e)}
-
-        @self.app.get("/get_artmode_settings")
-        async def get_artmode_settings():
-            if self.config_error:
-                return {"status": "error", "error": self.config_error}
-            if not self.monitor.tv_on:
-                return {"status": "error", "error": "TV is not on"}
-            try:
-                async with asyncio.timeout(TV_CALL_TIMEOUT):
-                    settings = await self.tv.get_artmode_settings('')
-                if not settings:
-                    return {"status": "error", "error": "Failed to retrieve art mode settings"}
-                return {"status": "success", "settings": settings}
-            except Exception as e:
-                return {"status": "error", "error": str(e)}
-
-        @self.app.get("/list_files")
-        async def list_files():
-            try:
-                return {"status": "success", "files": await self.file_items()}
-            except Exception as e:
-                return {"status": "error", "error": str(e)}
-
-        @self.app.get("/api/v1/thumbnail/{file_name:path}")
-        @self.app.get("/thumbnail/{file_name:path}")
-        async def thumbnail(file_name: str, size: int = 320):
-            if not HAVE_PIL:
-                raise HTTPException(status_code=501, detail="PIL not available")
-            safe = os.path.basename(file_name)
-            path = os.path.join(self.folder, safe)
-            if not os.path.isfile(path):
-                raise HTTPException(status_code=404, detail="file not found")
-            size = max(64, min(int(size), 1024))
-            try:
-                with Image.open(path) as img:
-                    img = img.convert("RGB")
-                    img.thumbnail((size, size))
-                    buf = io.BytesIO()
-                    img.save(buf, format="JPEG", quality=80)
-                    return Response(content=buf.getvalue(), media_type="image/jpeg",
-                                    headers={"Cache-Control": "public, max-age=86400"})
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=str(e))
-
-        @self.app.get("/status")
-        async def status():
-            '''
-            deprecated, use GET /api/v1/status
-            '''
-            if self.config_error:
-                return {"status": "error", "error": self.config_error}
-            return dict(self.status(), status="success")
-
-        @self.app.post("/power_on")
-        async def power_on():
-            if self.config_error:
-                return {"status": "error", "error": self.config_error}
-            try:
-                method = await self.wake()
-            except Exception as e:
-                return {"status": "error", "error": "power_on failed: {}".format(e)}
-            if method is None:
-                return {"status": "error", "error": "No way to wake the TV: pair IP Control or set tv_mac"}
-            return {"status": "success", "method": method}
-
-        @self.app.post("/ip_control/pair")
-        async def ip_control_pair():
-            '''
-            one-time IP Control pairing; press Allow on the TV within 30 s
-            '''
-            if self.ip_control is None:
-                return {"status": "error", "error": "IP Control is disabled, set the ip_control option"}
-            try:
-                await self.ip_control.async_pair()
-            except Exception as e:
-                return {"status": "error", "error": "pairing failed: {}".format(e)}
-            self.monitor.poke()
-            return {"status": "success"}
-
     class ShowRequest(BaseModel):
         file_name: Optional[str] = None
         content_id: Optional[str] = None
@@ -1341,9 +1090,7 @@ class TheFrameController:
 
         @self.app.exception_handler(RequestValidationError)
         async def validation_error(request: Request, exc: RequestValidationError):
-            if request.url.path.startswith("/api/v1/"):
-                return api_error(422, "invalid_request", str(exc.errors()))
-            return await request_validation_exception_handler(request, exc)
+            return api_error(422, "invalid_request", str(exc.errors()))
 
         @self.app.get("/api/v1/status")
         async def v1_status():
@@ -1441,6 +1188,44 @@ class TheFrameController:
             if count and req.position >= count:
                 return api_error(422, "invalid_request", "position {} is out of range (0-{})".format(req.position, count - 1))
             return await v1_slideshow_show(req.position)
+
+        @self.app.get("/api/v1/thumbnail/{file_name:path}")
+        async def v1_thumbnail(file_name: str, size: int = 320):
+            if not HAVE_PIL:
+                return api_error(501, "not_available", "Pillow is not installed")
+            path = os.path.join(self.folder, os.path.basename(file_name))
+            if not os.path.isfile(path):
+                return api_error(404, "not_found", "{} is not in the image folder".format(file_name))
+            size = max(64, min(int(size), 1024))
+            try:
+                with Image.open(path) as img:
+                    img = img.convert("RGB")
+                    img.thumbnail((size, size))
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG", quality=80)
+            except Exception as e:
+                return api_error(422, "invalid_image", "{} cannot be read as an image: {}".format(file_name, e))
+            return Response(content=buf.getvalue(), media_type="image/jpeg",
+                            headers={"Cache-Control": "public, max-age=86400"})
+
+        @self.app.post("/api/v1/reconcile")
+        async def v1_reconcile():
+            '''
+            recover content IDs missing from json_path by comparing the TV's thumbnails with the image files;
+            slow, only needed after json_path was lost or replaced
+            '''
+            if not HAVE_PIL:
+                return api_error(501, "not_available", "Pillow is not installed")
+            error = self.v1_unavailable()
+            if error:
+                return error
+            try:
+                await self.get_api_version()
+                await self.pil.initialize()
+            except Exception as e:
+                return api_error(502, "tv_error", "reconcile failed: {}".format(e))
+            self.publish_status()
+            return {"file_count": len(self.tv_files)}
 
         @self.app.get("/api/v1/settings")
         async def v1_settings():

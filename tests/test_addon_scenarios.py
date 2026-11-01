@@ -29,7 +29,10 @@ def recorded(addon):
 
 
 def sync(addon):
-    return addon.client.post("/sync_files").json()
+    """start a sync job and let the monitor run it; returns the job state (queued or done)"""
+    addon.client.post("/api/v1/sync")
+    addon.check()
+    return addon.controller.job.state
 
 
 def test_starts_with_tv_off_and_answers_immediately(addon):
@@ -37,30 +40,29 @@ def test_starts_with_tv_off_and_answers_immediately(addon):
     addon.check()
 
     started = time.monotonic()
-    status = addon.client.get("/status").json()
-    show = addon.client.post("/show_file", json={"file_name": "a.jpg"}).json()
-    settings = addon.client.get("/get_artmode_settings").json()
+    status = addon.client.get("/api/v1/status").json()
+    show = addon.client.post("/api/v1/show", json={"file_name": "a.jpg"})
+    settings = addon.client.get("/api/v1/settings")
     assert time.monotonic() - started < 1
     assert status["power_state"] == "off"
     assert status["in_artmode"] is False
-    assert show == {"status": "error", "error": "TV is not in art mode"}
-    assert settings == {"status": "error", "error": "TV is not on"}
+    assert (show.status_code, show.json()["error"]["code"]) == (409, "tv_not_in_art_mode")
+    assert (settings.status_code, settings.json()["error"]["code"]) == (409, "tv_not_on")
 
 
 def test_standby_is_reported_and_art_commands_refused(addon):
     addon.tv.power = "standby"
     addon.check()
 
-    assert addon.client.get("/status").json()["power_state"] == "standby"
-    assert addon.client.post("/show_slideshow_next").json()["error"] == "TV is not in art mode"
+    assert addon.client.get("/api/v1/status").json()["power_state"] == "standby"
+    assert addon.client.post("/api/v1/slideshow/next").json()["error"]["code"] == "tv_not_in_art_mode"
 
 
 def test_art_settings_work_while_watching_tv(addon):
     addon.tv.power = "tv"
     addon.check()
 
-    data = addon.client.get("/get_artmode_settings").json()
-    assert data["status"] == "success"
+    data = addon.client.get("/api/v1/settings").json()
     assert {s["item"] for s in data["settings"]} >= {"brightness", "motion_timer"}
 
 
@@ -70,29 +72,29 @@ def test_queued_sync_runs_once_art_mode_appears(addon):
     addon.tv.power = "off"
     addon.check()
 
-    assert sync(addon)["status"] == "queued"
+    assert sync(addon) == "queued"
     assert addon.tv.uploaded == []
 
     addon.tv.power = "art"
     addon.check()
     assert len(addon.tv.uploaded) == 2
     assert set(recorded(addon)) == {"a.jpg", "b.jpg"}
-    assert addon.client.get("/status").json()["sync_pending"] is False
-    keywords = addon.client.get("/available_keywords").json()["keywords"]
+    assert addon.client.get("/api/v1/status").json()["sync_pending"] is False
+    keywords = addon.client.get("/api/v1/keywords").json()["keywords"]
     assert keywords == ["Architektur", "Blüte"]
 
 
 def test_slow_tv_does_not_block_requests(theframe, addon, monkeypatch):
     write_image(addon.images, "a.jpg")
     addon.check()
-    assert sync(addon)["status"] == "success"
+    assert sync(addon) == "done"
 
     monkeypatch.setattr(theframe, "TV_CALL_TIMEOUT", 0.2)
     addon.tv.latency = 5
     started = time.monotonic()
-    data = addon.client.post("/show_file", json={"file_name": "a.jpg"}).json()
+    response = addon.client.post("/api/v1/show", json={"file_name": "a.jpg"})
     assert time.monotonic() - started < 2
-    assert data == {"status": "error", "error": "Failed to display content ID"}
+    assert (response.status_code, response.json()["error"]["code"]) == (502, "tv_error")
 
 
 def test_connection_drop_mid_upload_is_retried(theframe, addon, monkeypatch):
@@ -102,7 +104,7 @@ def test_connection_drop_mid_upload_is_retried(theframe, addon, monkeypatch):
     addon.check()
     addon.tv.drop_connection_on_upload = 2
 
-    assert sync(addon)["status"] == "queued"
+    assert sync(addon) == "queued"
     assert len(recorded(addon)) == 1           # folder order is arbitrary
 
     addon.tv.drop_connection_on_upload = None
@@ -118,7 +120,7 @@ def test_leaving_art_mode_during_sync_keeps_it_queued(addon):
     addon.check()
     addon.tv.leave_art_after_upload = 1
 
-    assert sync(addon)["status"] == "queued"
+    assert sync(addon) == "queued"
     assert len(recorded(addon)) == 1           # folder order is arbitrary
 
     addon.check()                               # monitor sees 'tv': still queued
@@ -178,13 +180,13 @@ def test_slideshow_survives_a_reupload(addon):
     write_image(addon.images, "b.jpg")
     addon.check()
     sync(addon)
-    addon.client.post("/initialize_slideshow_files", json={"file_names": ["a.jpg", "b.jpg"]})
+    addon.client.put("/api/v1/slideshow", json={"mode": "files", "files": ["a.jpg", "b.jpg"]})
 
     later = time.time() + 60
     os.utime(path, (later, later))
     sync(addon)
-    data = addon.client.post("/show_slideshow_index", json={"slideshow_index": 0}).json()
-    assert data == {"status": "success", "shown": recorded(addon)["a.jpg"]}
+    data = addon.client.post("/api/v1/slideshow/show", json={"position": 0}).json()
+    assert data["shown"] == recorded(addon)["a.jpg"]
 
 
 def test_slideshow_survives_an_addon_restart(theframe, addon, tmp_path):
@@ -192,8 +194,8 @@ def test_slideshow_survives_an_addon_restart(theframe, addon, tmp_path):
     write_image(addon.images, "b.jpg")
     addon.check()
     sync(addon)
-    addon.client.post("/initialize_slideshow_files", json={"file_names": ["a.jpg", "b.jpg"], "slideshow_index": 1})
+    addon.client.put("/api/v1/slideshow", json={"mode": "files", "files": ["a.jpg", "b.jpg"], "position": 1})
 
     restarted = theframe.TheFrameController(options_file=str(write_options(tmp_path)))
-    status = TestClient(restarted.app).get("/status").json()
-    assert (status["slideshow_count"], status["slideshow_index"]) == (2, 1)
+    status = TestClient(restarted.app).get("/api/v1/status").json()
+    assert (status["slideshow"]["count"], status["slideshow"]["position"]) == (2, 1)

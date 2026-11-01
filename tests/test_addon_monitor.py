@@ -15,9 +15,8 @@ def test_status_answers_while_tv_unreachable(addon):
     addon.check()
 
     started = time.monotonic()
-    data = addon.client.get("/status").json()
+    data = addon.client.get("/api/v1/status").json()
     assert time.monotonic() - started < 1
-    assert data["status"] == "success"
     assert data["power_state"] == "off"
     assert data["in_artmode"] is False
     assert "no route to host" in data["error"]
@@ -41,8 +40,8 @@ def test_art_commands_fail_fast_outside_art_mode(addon):
     addon.tv.add_photo("MY_F2")
     addon.check()
 
-    data = addon.client.post("/show_image", json={"content_id": "MY_F2"}).json()
-    assert data == {"status": "error", "error": "TV is not in art mode"}
+    response = addon.client.post("/api/v1/show", json={"content_id": "MY_F2"})
+    assert (response.status_code, response.json()["error"]["code"]) == (409, "tv_not_in_art_mode")
     assert addon.tv.selected == []
 
 
@@ -50,10 +49,10 @@ def test_show_image_in_art_mode_updates_current_artwork(addon):
     addon.tv.add_photo("MY_F2")
     addon.check()
 
-    data = addon.client.post("/show_image", json={"content_id": "MY_F2"}).json()
-    assert data == {"status": "success", "shown": "MY_F2"}
+    data = addon.client.post("/api/v1/show", json={"content_id": "MY_F2"}).json()
+    assert data["shown"] == "MY_F2"
     assert addon.tv.selected == ["MY_F2"]
-    assert addon.client.get("/status").json()["current_content_id"] == "MY_F2"
+    assert addon.client.get("/api/v1/status").json()["current_content_id"] == "MY_F2"
 
 
 def test_missing_tv_ip_is_reported_instead_of_exiting(theframe, tmp_path):
@@ -62,15 +61,15 @@ def test_missing_tv_ip_is_reported_instead_of_exiting(theframe, tmp_path):
     controller = theframe.TheFrameController(options_file=str(path))
 
     with TestClient(controller.app) as client:     # runs the lifespan; no monitor is started
-        data = client.get("/status").json()
-    assert data["status"] == "error"
-    assert "tv_ip" in data["error"]
+        data = client.get("/api/v1/status").json()
+    assert data["error"]["code"] == "not_configured"
+    assert "tv_ip" in data["error"]["message"]
 
 
 def test_power_on_needs_ip_control_or_mac(addon):
-    data = addon.client.post("/power_on").json()
-    assert data["status"] == "error"
-    assert "tv_mac" in data["error"]
+    data = addon.client.post("/api/v1/power_on").json()
+    assert data["error"]["code"] == "wake_unavailable"
+    assert "tv_mac" in data["error"]["message"]
 
 
 def test_power_check_that_never_answers_counts_as_off(theframe, addon, monkeypatch):
