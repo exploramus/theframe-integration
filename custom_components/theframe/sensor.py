@@ -7,7 +7,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DATA_FILES, DATA_STATUS, DOMAIN
+from .const import DATA_FILES, DATA_STATUS, DOMAIN, IMAGE_META_FIELDS
 from .coordinator import TheFrameCoordinator
 from .entity import TheFrameEntity
 
@@ -51,11 +51,14 @@ class CurrentImageSensor(TheFrameEntity, SensorEntity):
         match = next((f for f in files if f.get("content_id") == cid), None)
         if not match:
             return {"content_id": cid}
-        return {
+        attributes = {
             "content_id": cid,
             "file_name": match.get("file_name"),
             "keywords": match.get("keywords", []),
         }
+        # title, description, taken, place, latitude, longitude when the image has them
+        attributes.update({key: match[key] for key in IMAGE_META_FIELDS if match.get(key) not in (None, "")})
+        return attributes
 
 
 class ImageCountSensor(TheFrameEntity, SensorEntity):

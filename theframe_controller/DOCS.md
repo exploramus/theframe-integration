@@ -25,6 +25,7 @@ The add-on starts and answers at once even when the TV is off. It never switches
 | `matte` | `none` | Matte for uploaded images, e.g. `none`, `modern_polar`, `shadowbox_black`. |
 | `ip_control` | `false` | Use Samsung IP Control for the power state and switching the TV on (see below). |
 | `ip_control_token_file` | next to `token_file` | Where the IP Control pairing token is stored. |
+| `place_names` | `false` | Look up place names for the images' GPS positions (see *Image information*). |
 
 > **Keep `json_path` and `image_path` together.** A sync deletes from the TV every image recorded in `json_path` whose file is missing in `image_path`. Never point a second installation (or a test setup) at the same `json_path` with a different folder. Images you put on the TV in other ways are never touched.
 
@@ -64,6 +65,17 @@ The add-on owns the slideshow and its timer:
 **Collections** are named presets of either kind (a keyword set or a playlist). Loading a collection sets the slideshow to it, starting at its first image; changing keywords or files directly leaves the collection. The integration shows them as one select.
 
 Interval, on/off, mode, keywords or playlist, the active collection, the collections and the current position are saved and survive restarts. The slideshow stores file names and looks up the TV's content ID when it shows an image, so re-uploading a changed file does not break it. The timer pauses outside Art Mode and while a sync is running.
+
+### Image information
+
+The TV keeps no title or description for your own images; it only stores a date with each upload. The add-on therefore reads the information from the image files and offers it to Home Assistant:
+
+- **Title** (XMP `dc:title`) and **description** (XMP `dc:description` or EXIF `ImageDescription`): Photos writes these when *Titles, keywords and captions* is ticked on export.
+- **Capture time** (EXIF `DateTimeOriginal` with time zone). It is also sent to the TV with the upload, so the TV records when a photo was taken instead of when it was uploaded. Images uploaded before 1.5.0 keep their upload date on the TV until they are uploaded again.
+- **GPS position** (EXIF), if the export includes location information.
+- **Place name**, only with `place_names: true`: looked up from the GPS position with [OpenStreetMap Nominatim](https://nominatim.org) (for example `Hamburg, Deutschland`), once per place, rounded to about 100 m, at most one request per second. This sends the positions of your images to OpenStreetMap; with the option off, nothing leaves your network. Failed lookups are retried after the next sync.
+
+The integration shows these as attributes of `sensor.the_frame_current_image`.
 
 ### Waking the TV and IP Control
 
@@ -134,7 +146,7 @@ The integration uses the versioned API under `/api/v1`. Its full description is 
 | --- | --- |
 | `GET /api/v1/status` | Power state, current image, slideshow, current sync job |
 | `GET /api/v1/events` | Server-sent events: `status` (on connect and whenever it changes), `files` (after a sync) |
-| `GET /api/v1/files`, `GET /api/v1/keywords` | Uploaded files with keywords; all keywords |
+| `GET /api/v1/files`, `GET /api/v1/keywords` | Uploaded files with keywords, `title`, `description`, `taken`, `place`, `latitude`, `longitude`; all keywords |
 | `POST /api/v1/sync` | Start a sync job: `202` with the job; `409` while one is queued or running |
 | `POST /api/v1/show` | Show `{"file_name": "..."}` or `{"content_id": "..."}` |
 | `GET`, `PUT /api/v1/slideshow` | Slideshow settings: `enabled`, `interval_minutes`, `mode` (`keywords` or `files`), `keywords`, `files`, `position`; `{"collection": "name"}` loads a collection |

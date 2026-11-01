@@ -30,8 +30,11 @@ STATUS = {
     "error": None,
 }
 FILES = [
-    {"file_name": "a.jpg", "content_id": "MY_F1", "keywords": ["Sea"], "modified": 1},
-    {"file_name": "b.jpg", "content_id": "MY_F2", "keywords": ["Forest"], "modified": 1},
+    {"file_name": "a.jpg", "content_id": "MY_F1", "keywords": ["Sea"], "modified": 1,
+     "title": "Chilehaus", "description": None, "taken": "2026-08-15T12:16:09+02:00",
+     "place": "Hamburg, Deutschland", "latitude": 53.5482, "longitude": 10.003403},
+    {"file_name": "b.jpg", "content_id": "MY_F2", "keywords": ["Forest"], "modified": 1,
+     "title": None, "description": None, "taken": None, "place": None, "latitude": None, "longitude": None},
 ]
 
 
