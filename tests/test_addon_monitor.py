@@ -79,3 +79,23 @@ def test_power_check_that_never_answers_counts_as_off(theframe, addon, monkeypat
     asyncio.run(addon.controller.monitor.check())
     assert addon.controller.monitor.state == "off"
     assert "did not answer" in addon.controller.monitor.error
+
+
+def test_polls_steadily_in_standby_and_backs_off_only_while_unreachable(addon):
+    monitor = addon.controller.monitor
+    monitor.state = "standby"
+    assert monitor.next_delay("standby", 10) == 10
+    monitor.state = "art"
+    assert monitor.next_delay("art", 10) == 10
+    monitor.state = "off"
+    assert monitor.next_delay("standby", 10) == 10        # just changed: check again soon
+    assert monitor.next_delay("off", 10) == 20
+    assert monitor.next_delay("off", 20) == 30            # capped at POLL_INTERVAL_MAX
+    assert monitor.next_delay("off", 30) == 30
+
+
+def test_status_reports_connected_event_clients(addon):
+    addon.check()
+    assert addon.client.get("/api/v1/status").json()["event_clients"] == 0
+    addon.controller.events.queues.add(asyncio.Queue())
+    assert addon.client.get("/api/v1/status").json()["event_clients"] == 1

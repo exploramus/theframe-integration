@@ -81,3 +81,33 @@ async def test_status_events_update_entities(hass, addon):
         sync = hass.states.get("sensor.the_frame_sync")
         assert (sync.state, sync.attributes["done"], sync.attributes["total"]) == ("running", 1, 2)
         assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_new_image_bumps_the_image_entity_so_dashboards_reload_it(hass, addon):
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    next_image = asyncio.Event()
+
+    async def events(self):
+        yield "status", STATUS
+        await next_image.wait()
+        yield "status", dict(STATUS, current_content_id="MY_F2", current_file="b.jpg")
+        await asyncio.Event().wait()
+
+    with patch("custom_components.theframe.api.TheFrameApi.events", events):
+        entry = MockConfigEntry(domain="theframe", data={"base_url": BASE})
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        for _ in range(10):
+            await asyncio.sleep(0)
+        before = hass.states.get("image.the_frame_current_image").state
+
+        await asyncio.sleep(0.01)       # image_last_updated has a timestamp resolution
+        next_image.set()
+        for _ in range(10):
+            await asyncio.sleep(0)
+        after = hass.states.get("image.the_frame_current_image")
+        assert after.state != before
+        assert after.attributes["file_name"] == "b.jpg"
+        assert await hass.config_entries.async_unload(entry.entry_id)

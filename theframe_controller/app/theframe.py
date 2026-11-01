@@ -41,7 +41,7 @@ from samsungframetv.async_art import SamsungTVAsyncArt
 OPTIONS_FILE = os.environ.get("THEFRAME_OPTIONS", "/data/options.json")
 
 POLL_INTERVAL = 10          # seconds between power state checks while the TV is on
-POLL_INTERVAL_MAX = 60      # back-off limit while the TV is off or in standby
+POLL_INTERVAL_MAX = 30      # back-off limit while the TV does not answer at all
 TV_CALL_TIMEOUT = 30        # outer safety net around TV calls, the library has its own timeouts
 TV_CHECK_TIMEOUT = 15       # power state check; the library's async REST calls have no timeout of their own
 TV_CONNECT_TIMEOUT = 10     # client timeout: sync REST call in the constructor and websocket open
@@ -135,6 +135,7 @@ class EventHub:
     '''
 
     def __init__(self):
+        self.log = logging.getLogger('Main.'+__class__.__name__)
         self.queues = set()
 
     def publish(self, event, data):
@@ -149,6 +150,7 @@ class EventHub:
     async def stream(self, first_event):
         queue = asyncio.Queue(maxsize=100)
         self.queues.add(queue)
+        self.log.info('event stream client connected ({} open)'.format(len(self.queues)))
         try:
             yield self.format(*first_event)
             while True:
@@ -159,6 +161,7 @@ class EventHub:
                     yield ': keepalive\n\n'
         finally:
             self.queues.discard(queue)
+            self.log.info('event stream client disconnected ({} open)'.format(len(self.queues)))
 
 
 class TVMonitor:
@@ -198,15 +201,21 @@ class TVMonitor:
         while True:
             previous = self.state
             await self.check()
-            if self.state in TV_ON_STATES or self.state != previous:
-                delay = self.interval
-            else:
-                delay = min(delay * 2, self.interval_max)
+            delay = self.next_delay(previous, delay)
             try:
                 await asyncio.wait_for(self._wakeup.wait(), delay)
             except asyncio.TimeoutError:
                 pass
             self._wakeup.clear()
+
+    def next_delay(self, previous, delay):
+        '''
+        seconds until the next check; standby answers quickly and can turn into art mode any moment
+        (motion sensor, remote), so only back off while the TV does not answer at all
+        '''
+        if self.state in ('off', 'unknown') and self.state == previous:
+            return min(delay * 2, self.interval_max)
+        return self.interval
 
     async def check(self):
         '''
@@ -979,6 +988,7 @@ class TheFrameController:
             "art_service_available": self.tv.art_service_available if self.tv is not None else None,
             "ip_control": "paired" if self.paired_ip_control() else ("unpaired" if self.ip_control else "disabled"),
             "error": self.monitor.error,
+            "event_clients": len(self.events.queues),
         }
 
     def publish_status(self):

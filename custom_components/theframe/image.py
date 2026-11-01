@@ -13,7 +13,7 @@ import aiohttp
 
 from homeassistant.components.image import ImageEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
@@ -46,15 +46,23 @@ class CurrentImage(TheFrameEntity, ImageEntity):
         self._last_content_id: str | None = None
         self._attr_image_last_updated = dt_util.utcnow()
 
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        # The image entity's state is image_last_updated; dashboards only reload
+        # the picture when it changes, so bump it as soon as the image changes.
+        status = (self.coordinator.data or {}).get(DATA_STATUS) or {}
+        cid = status.get("current_content_id")
+        if cid != self._last_content_id:
+            self._last_content_id = cid
+            self._attr_image_last_updated = dt_util.utcnow()
+        super()._handle_coordinator_update()
+
     def _current_file_name(self) -> str | None:
         status = (self.coordinator.data or {}).get(DATA_STATUS) or {}
         files = (self.coordinator.data or {}).get(DATA_FILES) or []
         cid = status.get("current_content_id")
         if not cid:
             return None
-        if cid != self._last_content_id:
-            self._last_content_id = cid
-            self._attr_image_last_updated = dt_util.utcnow()
         match = next((f for f in files if f.get("content_id") == cid), None)
         return match.get("file_name") if match else None
 
