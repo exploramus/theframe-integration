@@ -974,10 +974,15 @@ class TheFrameController:
         self.publish_status()
         return content_id, None
 
-    def update_slideshow(self, **changes):
-        for k, v in changes.items():
-            if v is not None:
-                setattr(self.slideshow, k, v)
+    def update_slideshow(self, source, **changes):
+        '''
+        change slideshow settings; source (the endpoint) is logged, so unexpected changes can be traced
+        '''
+        changed = {k: v for k, v in changes.items() if v is not None and getattr(self.slideshow, k) != v}
+        if changed:
+            self.log.info('slideshow changed via {}: {}'.format(source, changed))
+        for k, v in changed.items():
+            setattr(self.slideshow, k, v)
         self.slideshow.save()
         self.publish_status()
 
@@ -1158,7 +1163,7 @@ class TheFrameController:
                 # keep the running slideshow instead of wiping it for a filter without matches
                 return {"status": "error", "error": "No valid slideshow files found"}
             index = req.slideshow_index if 0 <= req.slideshow_index < len(matched) else 0
-            self.update_slideshow(mode='keywords', keywords=list(req.keyword_list), position=index - 1)
+            self.update_slideshow('/initialize_slideshow (deprecated)', mode='keywords', keywords=list(req.keyword_list), position=index - 1)
             return {"status": "success", "slideshow": matched, "index": index}
 
         @self.app.post("/initialize_slideshow_files")
@@ -1179,7 +1184,7 @@ class TheFrameController:
                     "missing": missing,
                 }
             index = req.slideshow_index if 0 <= req.slideshow_index < len(accepted) else 0
-            self.update_slideshow(mode='files', files=accepted, position=index - 1)
+            self.update_slideshow('/initialize_slideshow_files (deprecated)', mode='files', files=accepted, position=index - 1)
             return {"status": "success", "count": len(accepted), "missing": missing, "index": index}
 
         async def legacy_slideshow_show(position):
@@ -1408,7 +1413,7 @@ class TheFrameController:
             changes = req.model_dump(exclude_none=True)
             if "files" in changes:
                 changes["files"] = list(dict.fromkeys(changes["files"]))
-            self.update_slideshow(**changes)
+            self.update_slideshow('PUT /api/v1/slideshow', **changes)
             return dict(self.slideshow.as_dict(), count=len(self.playlist()))
 
         async def v1_slideshow_show(position):

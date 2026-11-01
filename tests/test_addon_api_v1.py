@@ -162,7 +162,7 @@ def test_slideshow_timer_advances_and_pauses(addon):
 
     addon.tv.power = "art"
     addon.check()
-    controller.update_slideshow(enabled=False)
+    controller.update_slideshow("test", enabled=False)
     assert not tick(61)
 
 
@@ -174,3 +174,13 @@ def test_event_stream_starts_with_the_status(addon):
         assert next(lines) == "event: status"
         data = json.loads(next(lines).removeprefix("data: "))
     assert data["power_state"] == "art"
+
+
+def test_slideshow_changes_are_logged_with_their_source(addon, caplog):
+    addon.check()
+    with caplog.at_level("INFO"):
+        addon.client.put("/api/v1/slideshow", json={"enabled": True, "interval_minutes": 2})
+        addon.client.post("/initialize_slideshow", json={"keyword_list": ["Sea"], "slideshow_index": 0})
+    lines = [r.getMessage() for r in caplog.records if "slideshow changed" in r.getMessage()]
+    assert lines[0] == "slideshow changed via PUT /api/v1/slideshow: {'enabled': True}"   # interval was already 2
+    assert len(lines) == 1              # /initialize_slideshow matched no files, so nothing changed
