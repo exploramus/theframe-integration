@@ -119,7 +119,7 @@ Useful lines in the add-on log:
 
 - `TV power state: standby -> art` — every power state change.
 - `did not accept the connection (ms.channel.timeOut)` — press **Allow** on the TV, or check the token file.
-- `slideshow changed via …: {...}` — every slideshow change and which endpoint made it. Changes via `(deprecated)` endpoints come from old automations or `rest_command`s.
+- `slideshow changed via …: {...}` — every slideshow change and which endpoint made it.
 - `sync … failed, retrying in art mode` — a sync will be retried.
 - `event stream client connected (1 open)` — the integration is connected.
 
@@ -140,10 +140,11 @@ The integration uses the versioned API under `/api/v1`. Its full description is 
 | `POST /api/v1/power_on` | Switch the TV on (IP Control or Wake-on-LAN) |
 | `POST /api/v1/ip_control/pair` | Pair IP Control |
 | `GET /api/v1/thumbnail/{file}?size=320` | JPEG thumbnail of an image file |
+| `POST /api/v1/reconcile` | Recover content IDs missing from `json_path` by comparing the TV's thumbnails with the image files (slow; only needed after `json_path` was lost) |
 
-Errors use HTTP status codes with a body `{"error": {"code": "...", "message": "..."}}`. Codes: `not_configured` (503); `tv_not_in_art_mode`, `tv_not_on`, `job_conflict`, `empty_slideshow`, `wake_unavailable`, `ip_control_disabled` (409); `not_found` (404); `invalid_request` (422); `tv_error` (502).
+Errors use HTTP status codes with a body `{"error": {"code": "...", "message": "..."}}`. Codes: `not_configured` (503); `tv_not_in_art_mode`, `tv_not_on`, `job_conflict`, `empty_slideshow`, `wake_unavailable`, `ip_control_disabled` (409); `not_found` (404); `invalid_request`, `invalid_image` (422); `not_available` (501); `tv_error` (502).
 
-The endpoints of older versions (`/status`, `/sync_files`, `/show_file`, `/initialize_slideshow`, `/show_slideshow_next`, …) still work on the same state but are deprecated and will be removed in a later release. Move automations and `rest_command`s to the integration's entities and actions.
+The unversioned endpoints of versions before 1.4.0 (`/status`, `/sync_files`, `/show_file`, `/initialize_slideshow`, …) are gone; use the integration's entities and actions, or `/api/v1`.
 
 ## Development
 

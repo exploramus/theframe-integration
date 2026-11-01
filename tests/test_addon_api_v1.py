@@ -180,7 +180,14 @@ def test_slideshow_changes_are_logged_with_their_source(addon, caplog):
     addon.check()
     with caplog.at_level("INFO"):
         addon.client.put("/api/v1/slideshow", json={"enabled": True, "interval_minutes": 2})
-        addon.client.post("/initialize_slideshow", json={"keyword_list": ["Sea"], "slideshow_index": 0})
+        addon.client.put("/api/v1/slideshow", json={"enabled": True})
     lines = [r.getMessage() for r in caplog.records if "slideshow changed" in r.getMessage()]
-    assert lines[0] == "slideshow changed via PUT /api/v1/slideshow: {'enabled': True}"   # interval was already 2
-    assert len(lines) == 1              # /initialize_slideshow matched no files, so nothing changed
+    assert lines == ["slideshow changed via PUT /api/v1/slideshow: {'enabled': True}"]   # interval was already 2; no-op not logged
+
+
+def test_only_the_versioned_api_is_served(addon):
+    for method, path in [("get", "/status"), ("post", "/sync_files"), ("post", "/show_file"),
+                         ("post", "/initialize_slideshow"), ("get", "/thumbnail/a.jpg")]:
+        assert getattr(addon.client, method)(path).status_code in (404, 405), path
+    paths = addon.controller.app.openapi()["paths"]
+    assert all(p.startswith("/api/v1/") for p in paths)

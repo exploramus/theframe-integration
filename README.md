@@ -100,7 +100,7 @@ A starter dashboard is in [`dashboards/theframe.yaml`](dashboards/theframe.yaml)
 
 **Images from OneDrive:** the add-on syncs a local folder with the TV. To fill that folder from OneDrive or another cloud, see *Images from OneDrive* in [DOCS.md](theframe_controller/DOCS.md).
 
-**Coming from the old YAML setup** (helpers, template switches, `rest_command`s and automations from earlier add-on versions): the integration replaces all of it. Remove those parts after installing the integration; otherwise old automations keep changing the slideshow through deprecated endpoints. The add-on log shows such changes as `slideshow changed via … (deprecated)`.
+**Coming from the old YAML setup** (helpers, template switches, `rest_command`s and automations from add-on versions before 1.3): the integration replaces all of it. Since 1.4.0 the add-on only serves `/api/v1`, so old `rest_command`s calling `/sync_files`, `/initialize_slideshow` and similar no longer work; remove them.
 
 ## Development
 
