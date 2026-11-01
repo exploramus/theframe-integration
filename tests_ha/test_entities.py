@@ -111,3 +111,16 @@ async def test_new_image_bumps_the_image_entity_so_dashboards_reload_it(hass, ad
         assert after.state != before
         assert after.attributes["file_name"] == "b.jpg"
         assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_interval_select_for_apple_home(hass, setup_entry, addon):
+    # interval 7 is not one of the choices
+    assert hass.states.get("select.the_frame_slideshow_interval").state == "unknown"
+    assert "10 min" in hass.states.get("select.the_frame_slideshow_interval").attributes["options"]
+
+    addon.put(f"{BASE}/api/v1/slideshow", json=dict(STATUS["slideshow"], interval_minutes=10))
+    await hass.services.async_call("select", "select_option",
+                                   {"entity_id": "select.the_frame_slideshow_interval", "option": "10 min"}, blocking=True)
+    assert calls(addon, "PUT", "/api/v1/slideshow") == [{"interval_minutes": 10}]
+    assert hass.states.get("select.the_frame_slideshow_interval").state == "10 min"
+    assert hass.states.get("number.the_frame_slideshow_interval").state == "10.0"

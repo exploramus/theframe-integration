@@ -14,6 +14,8 @@ UPDATE_INTERVAL_SECONDS = 60
 # Slideshow interval bounds for the number entity; the add-on runs the timer.
 MIN_SLIDESHOW_INTERVAL_MIN = 1
 MAX_SLIDESHOW_INTERVAL_MIN = 30
+# Choices for the interval select entity (shown in Apple Home as one switch each)
+SLIDESHOW_INTERVAL_CHOICES_MIN = [1, 2, 3, 5, 10, 15, 20, 30]
 
 # Service names exposed by the integration.
 SERVICE_SHOW_FILE = "show_file"
@@ -31,6 +33,7 @@ DATA_FILES = "files"
 PLATFORMS = [
     "switch",
     "number",
+    "select",
     "button",
     "sensor",
     "binary_sensor",
