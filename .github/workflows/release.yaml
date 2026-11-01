@@ -18,7 +18,8 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install pytest pyyaml
-      - run: pytest tests/test_versions.py
+      # the shared conftest needs the add-on's dependencies; the version check does not
+      - run: pytest --noconftest tests/test_versions.py
         env:
           RELEASE_TAG: ${{ github.ref_name }}
 
