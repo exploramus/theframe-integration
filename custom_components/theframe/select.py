@@ -1,8 +1,9 @@
 """Select platform for The Frame.
 
-The slideshow interval as a choice of fixed values. Apple Home has no number
-controls, but the HomeKit bridge exposes a select as one switch per option,
-so this replaces an input_select helper plus sync automations.
+Apple Home has no list or number controls, but the HomeKit bridge shows a
+select as one tile with one switch per option. The collection select puts all
+slideshow presets into a single tile; the interval select replaces an
+input_select helper plus sync automations.
 """
 
 from __future__ import annotations
@@ -25,7 +26,34 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     coordinator: TheFrameCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    async_add_entities([SlideshowIntervalSelect(coordinator)])
+    async_add_entities([CollectionSelect(coordinator), SlideshowIntervalSelect(coordinator)])
+
+
+class CollectionSelect(TheFrameEntity, SelectEntity):
+    """The add-on's slideshow collections (named keyword sets or playlists); picking one loads it."""
+
+    _attr_name = "Collection"
+    _attr_icon = "mdi:image-multiple-outline"
+
+    def __init__(self, coordinator: TheFrameCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_collection"
+
+    @property
+    def options(self) -> list[str]:
+        return list(self.coordinator.status.get("collections") or [])
+
+    @property
+    def available(self) -> bool:
+        return super().available and bool(self.options)
+
+    @property
+    def current_option(self) -> str | None:
+        """None while the slideshow was changed by hand (keyword switches, play_files)."""
+        return self.coordinator.slideshow.get("collection")
+
+    async def async_select_option(self, option: str) -> None:
+        await self.coordinator.set_slideshow(collection=option)
 
 
 class SlideshowIntervalSelect(TheFrameEntity, SelectEntity):

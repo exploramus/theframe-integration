@@ -67,3 +67,48 @@ play_files:
       default: true
       selector:
         boolean:
+
+save_collection:
+  name: Save collection
+  description: >-
+    Save a named slideshow preset (a "collection") in the add-on: a set of
+    keywords or an ordered list of files. Without keywords or files, the
+    current slideshow is saved. Saving under an existing name replaces it.
+    Collections appear as options of the Collection select (one tile in
+    Apple Home).
+  fields:
+    name:
+      name: Name
+      description: Name of the collection, e.g. "Ameland" (no slashes).
+      required: true
+      example: Ameland
+      selector:
+        text:
+    keywords:
+      name: Keywords
+      description: Show images with any of these keywords.
+      example: "[Himmel, ShoreShades]"
+      selector:
+        text:
+          multiple: true
+    file_names:
+      name: File names
+      description: Show these files in this order (a playlist).
+      example: "[DSC_3218.jpeg, IMG_2809.jpeg]"
+      selector:
+        text:
+          multiple: true
+
+delete_collection:
+  name: Delete collection
+  description: >-
+    Delete a collection. If it is the active one, the slideshow keeps
+    showing the same images.
+  fields:
+    name:
+      name: Name
+      description: Name of the collection.
+      required: true
+      example: Ameland
+      selector:
+        text:

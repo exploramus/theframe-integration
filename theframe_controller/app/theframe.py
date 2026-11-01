@@ -65,9 +65,10 @@ class Slideshow:
     slideshow state owned by the add-on and persisted, so it survives restarts
     stores file names; content_ids are looked up when an image is shown, so a re-upload does not break it
     position is the index of the image shown last, -1 before the first one
+    collections are named presets of mode with keywords or files; collection is the active one, if any
     '''
 
-    FIELDS = ('enabled', 'interval_minutes', 'mode', 'keywords', 'files', 'position')
+    FIELDS = ('enabled', 'interval_minutes', 'mode', 'keywords', 'files', 'position', 'collection')
 
     def __init__(self, path=None):
         self.log = logging.getLogger('Main.'+__class__.__name__)
@@ -78,6 +79,8 @@ class Slideshow:
         self.keywords = []
         self.files = []
         self.position = -1
+        self.collection = None
+        self.collections = {}       # name -> {'mode': 'keywords', 'keywords': [...]} or {'mode': 'files', 'files': [...]}
         self.load()
 
     def as_dict(self):
@@ -88,10 +91,12 @@ class Slideshow:
             return
         try:
             with open(self.path) as f:
-                data = json.load(f).get('slideshow', {})
+                state = json.load(f)
+            data = state.get('slideshow', {})
             for k in self.FIELDS:
                 if k in data:
                     setattr(self, k, data[k])
+            self.collections = state.get('collections', {})
         except Exception as e:
             self.log.warning('could not read slideshow state from {}: {}'.format(self.path, e))
 
@@ -101,7 +106,7 @@ class Slideshow:
         try:
             tmp = self.path + '.tmp'
             with open(tmp, 'w') as f:
-                json.dump({'slideshow': self.as_dict()}, f)
+                json.dump({'slideshow': self.as_dict(), 'collections': self.collections}, f)
             os.replace(tmp, self.path)
         except Exception as e:
             self.log.warning('could not save slideshow state to {}: {}'.format(self.path, e))
@@ -922,14 +927,24 @@ class TheFrameController:
                 return []
         return raw if isinstance(raw, list) else []
 
-    def playlist(self):
+    def playlist(self, mode=None, keywords=None, files=None):
         '''
-        file names in the slideshow, in order; only files uploaded to the tv
+        file names in the slideshow (or for the given mode with keywords or files), in order;
+        only files uploaded to the tv
         '''
-        if self.slideshow.mode == 'files':
-            return [f for f in self.slideshow.files if f in self.tv_files]
-        wanted = set(self.slideshow.keywords)
+        if mode is None:
+            mode, keywords, files = self.slideshow.mode, self.slideshow.keywords, self.slideshow.files
+        if mode == 'files':
+            return [f for f in files or [] if f in self.tv_files]
+        wanted = set(keywords or [])
         return [f for f, v in self.tv_files.items() if wanted.intersection(self.file_keywords(v))]
+
+    def collection_info(self, name):
+        collection = self.slideshow.collections[name]
+        return dict(collection, name=name, count=len(self.playlist(**collection)))
+
+    def collection_names(self):
+        return sorted(self.slideshow.collections, key=str.lower)
 
     async def slideshow_show(self, position):
         '''
@@ -953,7 +968,16 @@ class TheFrameController:
         '''
         change slideshow settings; source (the endpoint) is logged, so unexpected changes can be traced
         '''
-        changed = {k: v for k, v in changes.items() if v is not None and getattr(self.slideshow, k) != v}
+        changes = {k: v for k, v in changes.items() if v is not None}
+        name = changes.pop('collection', None)
+        if name is not None:
+            # load the collection; the slideshow starts again at its first image
+            collection = self.slideshow.collections[name]
+            changes.update(mode=collection['mode'], keywords=collection.get('keywords', []),
+                           files=collection.get('files', []), position=changes.get('position', -1), collection=name)
+        elif {'mode', 'keywords', 'files'} & changes.keys():
+            changes['collection'] = None    # changed by hand, no longer the collection
+        changed = {k: v for k, v in changes.items() if getattr(self.slideshow, k) != v}
         if changed:
             self.log.info('slideshow changed via {}: {}'.format(source, changed))
         for k, v in changed.items():
@@ -1000,6 +1024,7 @@ class TheFrameController:
             "sync_pending": self.sync_pending,
             "file_count": len(self.tv_files),
             "slideshow": dict(self.slideshow.as_dict(), count=count),
+            "collections": self.collection_names(),
             "job": self.job.as_dict() if self.job is not None else None,
             "power_state": self.monitor.state,
             "power_state_since": self.monitor.since,
@@ -1067,6 +1092,12 @@ class TheFrameController:
         keywords: Optional[list[str]] = None
         files: Optional[list[str]] = None
         position: Optional[int] = Field(None, ge=-1)
+        collection: Optional[str] = None
+
+    class CollectionRequest(BaseModel):
+        mode: Optional[Literal['keywords', 'files']] = None
+        keywords: Optional[list[str]] = None
+        files: Optional[list[str]] = None
 
     class SlideshowShowRequest(BaseModel):
         position: int = Field(ge=0)
@@ -1160,8 +1191,51 @@ class TheFrameController:
             changes = req.model_dump(exclude_none=True)
             if "files" in changes:
                 changes["files"] = list(dict.fromkeys(changes["files"]))
+            if "collection" in changes and changes["collection"] not in self.slideshow.collections:
+                return api_error(404, "not_found", "no collection named {}".format(changes["collection"]))
             self.update_slideshow('PUT /api/v1/slideshow', **changes)
             return dict(self.slideshow.as_dict(), count=len(self.playlist()))
+
+        @self.app.get("/api/v1/collections")
+        async def v1_collections():
+            await self.check_file_dict_availability(reload=True)
+            return {"collections": [self.collection_info(name) for name in self.collection_names()]}
+
+        @self.app.put("/api/v1/collections/{name}")
+        async def v1_collection_save(name: str, req: self.CollectionRequest):
+            '''
+            save a named slideshow preset: files (playlist), keywords, or without a body the current slideshow
+            '''
+            name = name.strip()
+            if not name or len(name) > 60:
+                return api_error(422, "invalid_request", "collection names need 1 to 60 characters")
+            mode = req.mode or ('files' if req.files is not None else 'keywords' if req.keywords is not None else None)
+            if mode is None:
+                mode, keywords, files = self.slideshow.mode, self.slideshow.keywords, self.slideshow.files
+            else:
+                keywords, files = req.keywords or [], req.files or []
+            collection = {'mode': 'files', 'files': list(dict.fromkeys(files))} if mode == 'files' else \
+                {'mode': 'keywords', 'keywords': sorted(set(keywords))}
+            self.slideshow.collections[name] = collection
+            self.log.info('collection saved: {}: {}'.format(name, collection))
+            if self.slideshow.collection == name:
+                self.update_slideshow('PUT /api/v1/collections', collection=name)
+            self.slideshow.save()
+            self.publish_status()
+            await self.check_file_dict_availability(reload=True)
+            return self.collection_info(name)
+
+        @self.app.delete("/api/v1/collections/{name}")
+        async def v1_collection_delete(name: str):
+            if name not in self.slideshow.collections:
+                return api_error(404, "not_found", "no collection named {}".format(name))
+            del self.slideshow.collections[name]
+            self.log.info('collection deleted: {}'.format(name))
+            if self.slideshow.collection == name:
+                self.slideshow.collection = None    # the slideshow keeps showing the same images
+            self.slideshow.save()
+            self.publish_status()
+            return {"deleted": name}
 
         async def v1_slideshow_show(position):
             error = self.v1_unavailable()

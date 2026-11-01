@@ -133,7 +133,7 @@ def test_slideshow_settings_survive_a_restart(addon, theframe, tmp_path):
     restarted = theframe.TheFrameController(options_file=str(write_options(tmp_path)))
     slideshow = TestClient(restarted.app).get("/api/v1/slideshow").json()
     assert slideshow == {"enabled": True, "interval_minutes": 7, "mode": "files",
-                         "keywords": [], "files": ["b.jpg", "a.jpg"], "position": 1, "count": 2}
+                         "keywords": [], "files": ["b.jpg", "a.jpg"], "position": 1, "collection": None, "count": 2}
 
 
 def test_slideshow_timer_advances_and_pauses(addon):
@@ -191,3 +191,55 @@ def test_only_the_versioned_api_is_served(addon):
         assert getattr(addon.client, method)(path).status_code in (404, 405), path
     paths = addon.controller.app.openapi()["paths"]
     assert all(p.startswith("/api/v1/") for p in paths)
+
+
+def test_collections_are_named_slideshow_presets(addon, theframe, tmp_path):
+    synced(addon, ("a.jpg", ["Sea"]), ("b.jpg", ["Forest"]), ("c.jpg", ["Sea", "Sky"]))
+    client = addon.client
+
+    sea = client.put("/api/v1/collections/Sea and Sky", json={"keywords": ["Sky", "Sea"]}).json()
+    assert sea == {"name": "Sea and Sky", "mode": "keywords", "keywords": ["Sea", "Sky"], "count": 2}
+    trip = client.put("/api/v1/collections/Ameland", json={"files": ["b.jpg", "a.jpg", "b.jpg", "missing.jpg"]}).json()
+    assert (trip["mode"], trip["files"], trip["count"]) == ("files", ["b.jpg", "a.jpg", "missing.jpg"], 2)
+    assert client.get("/api/v1/status").json()["collections"] == ["Ameland", "Sea and Sky"]
+
+    # activating a collection loads it and starts at its first image
+    slideshow = client.put("/api/v1/slideshow", json={"collection": "Ameland"}).json()
+    assert (slideshow["collection"], slideshow["mode"], slideshow["files"], slideshow["position"]) == \
+        ("Ameland", "files", ["b.jpg", "a.jpg", "missing.jpg"], -1)
+    assert client.post("/api/v1/slideshow/next").json()["file_name"] == "b.jpg"
+
+    # changing the content by hand leaves the collection; enabling or the interval do not
+    assert client.put("/api/v1/slideshow", json={"enabled": True}).json()["collection"] == "Ameland"
+    assert client.put("/api/v1/slideshow", json={"mode": "keywords", "keywords": ["Forest"]}).json()["collection"] is None
+
+    # saving without content stores the current slideshow
+    current = client.put("/api/v1/collections/Forest", json={}).json()
+    assert (current["mode"], current["keywords"]) == ("keywords", ["Forest"])
+
+    response = client.put("/api/v1/slideshow", json={"collection": "Nope"})
+    assert (response.status_code, response.json()["error"]["code"]) == (404, "not_found")
+
+    # collections survive a restart
+    restarted = theframe.TheFrameController(options_file=str(write_options(tmp_path)))
+    assert TestClient(restarted.app).get("/api/v1/status").json()["collections"] == ["Ameland", "Forest", "Sea and Sky"]
+
+
+def test_deleting_the_active_collection_keeps_the_slideshow(addon):
+    synced(addon, ("a.jpg", ["Sea"]))
+    addon.client.put("/api/v1/collections/Sea", json={"keywords": ["Sea"]})
+    addon.client.put("/api/v1/slideshow", json={"collection": "Sea"})
+
+    assert addon.client.delete("/api/v1/collections/Sea").json() == {"deleted": "Sea"}
+    slideshow = addon.client.get("/api/v1/slideshow").json()
+    assert (slideshow["collection"], slideshow["keywords"], slideshow["count"]) == (None, ["Sea"], 1)
+    assert addon.client.delete("/api/v1/collections/Sea").status_code == 404
+
+
+def test_updating_the_active_collection_applies_it(addon):
+    synced(addon, ("a.jpg", ["Sea"]), ("b.jpg", ["Forest"]))
+    addon.client.put("/api/v1/collections/Mix", json={"keywords": ["Sea"]})
+    addon.client.put("/api/v1/slideshow", json={"collection": "Mix"})
+    addon.client.put("/api/v1/collections/Mix", json={"keywords": ["Sea", "Forest"]})
+    slideshow = addon.client.get("/api/v1/slideshow").json()
+    assert (slideshow["collection"], slideshow["keywords"], slideshow["count"]) == ("Mix", ["Forest", "Sea"], 2)

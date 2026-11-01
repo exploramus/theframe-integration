@@ -7,6 +7,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from typing import Any
+from urllib.parse import quote
 
 import aiohttp
 from yarl import URL
@@ -31,6 +32,9 @@ ENDPOINTS: dict[str, tuple[str, str]] = {
     "slideshow_previous": ("POST", "/api/v1/slideshow/previous"),
     "slideshow_show": ("POST", "/api/v1/slideshow/show"),
     "thumbnail": ("GET", "/api/v1/thumbnail/{file_name}"),
+    "collections": ("GET", "/api/v1/collections"),
+    "collection_save": ("PUT", "/api/v1/collections/{name}"),
+    "collection_delete": ("DELETE", "/api/v1/collections/{name}"),
 }
 
 
@@ -58,12 +62,15 @@ class TheFrameApi:
     def base_url(self) -> str:
         return str(self._base)
 
-    def _url(self, name: str) -> URL:
-        return self._base / ENDPOINTS[name][1].lstrip("/")
+    def _url(self, endpoint: str, **params: str) -> URL:
+        path = ENDPOINTS[endpoint][1]
+        for key, value in params.items():
+            path = path.replace("{" + key + "}", quote(str(value), safe=""))
+        return URL(str(self._base) + path, encoded=True)
 
-    async def _request(self, name: str, json_body: Any = None) -> dict:
-        method = ENDPOINTS[name][0]
-        url = self._url(name)
+    async def _request(self, endpoint: str, json_body: Any = None, **params: str) -> dict:
+        method = ENDPOINTS[endpoint][0]
+        url = self._url(endpoint, **params)
         try:
             async with self._session.request(
                 method, url, json=json_body, timeout=REQUEST_TIMEOUT
@@ -112,6 +119,16 @@ class TheFrameApi:
     async def slideshow_show(self, position: int) -> dict:
         return await self._request("slideshow_show", {"position": position})
 
+    async def collections(self) -> list[dict]:
+        return (await self._request("collections")).get("collections", [])
+
+    async def save_collection(self, name: str, **content: Any) -> dict:
+        """Save a named slideshow preset: keywords=[...] or files=[...]; without content the current slideshow."""
+        return await self._request("collection_save", content, name=name)
+
+    async def delete_collection(self, name: str) -> dict:
+        return await self._request("collection_delete", name=name)
+
     async def events(self) -> AsyncIterator[tuple[str, Any]]:
         """Yield (event, data) from the add-on's server-sent events until the stream ends."""
         url = self._url("events")
@@ -133,5 +150,4 @@ class TheFrameApi:
             raise TheFrameApiError(f"event stream {url}: {err}") from err
 
     def thumbnail_url(self, file_name: str, size: int = 320) -> str:
-        path = ENDPOINTS["thumbnail"][1].replace("{file_name}", file_name)
-        return str((self._base / path.lstrip("/")).with_query({"size": str(size)}))
+        return str(self._url("thumbnail", file_name=file_name).with_query({"size": str(size)}))
