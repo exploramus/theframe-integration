@@ -1,15 +1,18 @@
 # TheFrame – Architecture & Development Environment Design
 
-Status: agreed design, 2026-10-31 (rev. 2: samsungframetv 4.1.4 reviewed). Basis: code review of `exploramus/theframe-controller` (add-on, v1.0.17.001) and `exploramus/theframe-integration` (integration, v0.1.0), GitHub state of 2026-05-04.
+Status: agreed design, 2026-10-31 (rev. 2: samsungframetv 4.1.4 reviewed; rev. 3, 2026-11-01: image sources stay outside, decision 6). Basis: code review of `exploramus/theframe-controller` (add-on, v1.0.17.001) and `exploramus/theframe-integration` (integration, v0.1.0), GitHub state of 2026-05-04.
 
 ## 1. Decisions
 
 1. **Keep add-on and integration separate**, but version and release them together from **one repository**.
-   - Reasons: process isolation for long-running jobs (sync, uploads, later OneDrive), independent lifecycle (HA restarts don't kill jobs), own dependency set (no conflicts with HA core pins, e.g. core's `samsungtvws`), and the add-on is testable without HA.
-2. **Add-on = engine.** Owns all TV and data work: TV connection, power state, WOL, sync, keyword index, slideshow state and timer, playlists, later OneDrive sync and the playlist editor (as the add-on's own web UI via Ingress).
+   - Reasons: process isolation for long-running jobs (sync, uploads), independent lifecycle (HA restarts don't kill jobs), own dependency set (no conflicts with HA core pins, e.g. core's `samsungtvws`), and the add-on is testable without HA.
+2. **Add-on = engine.** Owns all TV and data work: TV connection, power state, WOL, sync, keyword index, slideshow state and timer, playlists, later the playlist editor (as the add-on's own web UI via Ingress).
 3. **Integration = thin HA adapter.** Entities, services, media browser, HomeKit/Apple Home exposure. No TV access, no heavy work, no own copy of slideshow state.
 4. **Build the add-on on `samsungframetv` 4.1.x** (NickWaterton/samsung-tv-ws-api, published on PyPI since 4.0.0). It is the foundation of the TV monitor, not a late migration step. Details in section 3.0.
 5. **No HAOS staging for daily work.** The real risk is the data on the TV; it is addressed by safety rules in code and a fake TV. A HAOS VM (Synology VMM or UTM on the Mac) is used only once per add-on release to verify Supervisor-specific behaviour (Ingress, host network, options, `/media` mapping).
+6. **Image sources stay outside** (decided 2026-11-01). The add-on's contract is a local folder (`image_path`); how images get there is not part of the add-on or the integration, and no cloud sync is built in, not even a generic rclone step. Reasons: OneDrive is one of many possible sources; existing tools already cover them (rclone for 70+ cloud providers, the Samba share add-on, Syncthing, a Photos export from a Mac); keeping sources out keeps the add-on small and general. Today an HA automation runs `image_sync.sh` (rclone) and starts a TV sync only when it reports `changed`; DOCS.md shows it as a recipe.
+   - If convenience is wanted later: one generic step (rclone bundled in the image, options for remote and schedule) rather than a plugin architecture; plugins only for sources that are not files.
+   - iCloud shared albums: readable without login when "Public Website" is on, through undocumented web endpoints; but Apple stores shared-album photos at reduced resolution (about 2048 px long edge, to be confirmed) against the TV's 3840 × 2160, keywords are probably lost, and the album is public via its link. The full iCloud library needs an Apple ID login with 2FA that has to be renewed. Only worth a test with a real album before any decision.
 
 ## 2. Findings from the code review
 
@@ -185,4 +188,4 @@ Key test scenarios: add-on starts with TV off and answers immediately; queued sy
    - Integration: client for `/api/v1` with all endpoints in one `ENDPOINTS` table; coordinator takes `status` events from the stream (reconnect with back-off 5 s → 5 min; polling every 60 s stays as fallback and for files/keywords) and refreshes after `files` events; its own slideshow timer and in-memory slideshow state removed; switch, keyword switches, number and `play_files` only `PUT /api/v1/slideshow`; new `sensor.the_frame_sync`.
    - Contract (3.6): `tests/test_contract.py` checks every `ENDPOINTS` entry and the slideshow fields against the add-on's OpenAPI document; `tests/test_integration_client.py` runs the real client against the add-on served over HTTP with the fake TV, event stream included.
    - Home Assistant tests in `tests_ha/` (pytest-homeassistant-custom-component, Python 3.13, own CI job): entities mirror add-on state, switches/number/services send the right `PUT`s, status events update entities, sync conflict is not an error. `custom_components/__init__.py` added so the harness imports this repo's integration. mypy still deferred.
-5. Later: OneDrive sync via Microsoft Graph (OAuth) in the add-on; playlist editor via Ingress; new entities from the art settings API.
+5. Later: playlist editor via Ingress; new entities from the art settings API. (OneDrive sync in the add-on dropped, see decision 6.)
