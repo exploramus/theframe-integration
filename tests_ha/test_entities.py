@@ -21,6 +21,17 @@ async def test_entities_show_the_addon_state(hass, setup_entry):
     assert hass.states.get("binary_sensor.the_frame_in_art_mode").state == "on"
 
 
+async def test_current_image_sensor_shows_the_image_metadata(hass, setup_entry):
+    attributes = hass.states.get("sensor.the_frame_current_image").attributes
+
+    assert attributes["file_name"] == "a.jpg"
+    assert attributes["title"] == "Chilehaus"
+    assert attributes["taken"] == "2026-08-15T12:16:09+02:00"
+    assert attributes["place"] == "Hamburg, Deutschland"
+    assert (attributes["latitude"], attributes["longitude"]) == (53.5482, 10.003403)
+    assert "description" not in attributes      # fields the image does not have are left out
+
+
 async def test_switches_and_number_set_the_addon_slideshow(hass, setup_entry, addon):
     addon.put(f"{BASE}/api/v1/slideshow", json=dict(STATUS["slideshow"], enabled=False))
 

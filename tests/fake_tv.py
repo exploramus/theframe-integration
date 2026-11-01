@@ -26,6 +26,7 @@ class FakeFrameTV:
         self.art_service_available = True
         self.reset_calls = 0
         self.uploaded = []              # file data in upload order
+        self.upload_dates = []          # date passed with each upload
         self.selected = []
         self.drop_connection_on_upload = None   # raise ConnectionFailure on this upload (1-based)
         self.leave_art_after_upload = None      # switch to 'tv' after this upload (1-based)
@@ -103,6 +104,7 @@ class FakeFrameTV:
         if count == self.drop_connection_on_upload:
             raise exceptions.ConnectionFailure("connection dropped during upload")
         self.uploaded.append(file)
+        self.upload_dates.append(date)
         content_id = self.add_photo()
         if count == self.leave_art_after_upload:
             self.power = "tv"

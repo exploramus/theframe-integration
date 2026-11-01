@@ -18,7 +18,7 @@ The add-on works on its own through its API; the integration needs the add-on.
 - **Playlists** — an ordered list of images with `theframe.play_files`.
 - **Collections** — named presets (a keyword set or a playlist), picked from one select; one tile in Apple Home instead of a switch per keyword.
 - **Real-time status** — Art Mode, power state and the current image within about a second, pushed by the TV.
-- **Live image** of what the TV shows, for dashboards.
+- **Live image** of what the TV shows, for dashboards, with title, date and place from the image files.
 - **Media browser** — browse your images with thumbnails, by keyword, and show one on the TV.
 - **Apple Home** — slideshow, keywords and interval through Home Assistant's HomeKit bridge.
 - **Settings survive restarts** — the add-on owns the slideshow state.
@@ -45,7 +45,7 @@ Keep both at the same version; updates arrive through the add-on store and HACS.
 | `button.the_frame_sync_files` | Sync the image folder with the TV |
 | `button.the_frame_next_image`, `button.the_frame_previous_image` | Step through the slideshow |
 | `image.the_frame_current_image` | Picture of what the TV shows, for picture cards |
-| `sensor.the_frame_current_image` | Content ID of the current image; file name and keywords as attributes |
+| `sensor.the_frame_current_image` | Content ID of the current image; file name, keywords, title, description, capture time (`taken`), place and position as attributes |
 | `sensor.the_frame_image_count` | Images uploaded by the add-on |
 | `sensor.the_frame_sync` | Sync state: `idle`, `queued` (waiting for Art Mode), `running`, `done`; progress as attributes |
 | `sensor.the_frame_slideshow_position` | Position in the slideshow (disabled by default) |
@@ -121,6 +121,17 @@ script:
 - **Hide keywords:** **Settings → Devices & Services → The Frame → Configure**, enter keywords to hide (e.g. `TheFrame, exported`). Their switches and media browser folders disappear; the add-on's data is unchanged.
 - **Change the add-on URL:** **⋮ → Reconfigure** on the integration; entities and history are kept.
 - **Apple Home:** expose `select.the_frame_collection`, `switch.the_frame_slideshow`, `select.the_frame_slideshow_interval` and the next/previous buttons in the HomeKit bridge. Apple Home shows each select as one tile. Leave the keyword switches out and put the combinations you want into collections instead.
+
+**Image label:** title, place and capture date of the current image, e.g. in a Markdown card next to the live image (place names need the add-on option `place_names`):
+
+```yaml
+type: markdown
+content: >
+  {% set s = 'sensor.the_frame_current_image' %}
+  **{{ state_attr(s, 'title') or state_attr(s, 'description') or state_attr(s, 'file_name') }}**<br>
+  {{ state_attr(s, 'place') or '' }}
+  {% if state_attr(s, 'taken') %} · {{ as_datetime(state_attr(s, 'taken')).strftime('%B %Y') }}{% endif %}
+```
 
 A starter dashboard is in [`dashboards/theframe.yaml`](dashboards/theframe.yaml); its header explains how to add it. Replace the keyword switches with your own.
 

@@ -23,6 +23,7 @@ import datetime
 import re
 import uuid
 import xml.etree.ElementTree as ET
+import httpx
 from wakeonlan import send_magic_packet
 from iptcinfo3 import IPTCInfo
 HAVE_PIL = False
@@ -51,6 +52,10 @@ TV_EVENTS = ('art_mode_changed', 'image_selected', 'go_to_standby', 'wakeup')
 SYNC_RETRY_DELAY = 60       # seconds before a failed sync is retried
 SLIDESHOW_TICK = 5          # seconds between slideshow timer checks
 EVENT_KEEPALIVE = 15        # seconds between keep-alive comments on the event stream
+META_FIELDS = ('title', 'description', 'taken', 'place', 'latitude', 'longitude')
+NOMINATIM_URL = 'https://nominatim.openstreetmap.org/reverse'
+NOMINATIM_DELAY = 1.1       # seconds between requests (Nominatim allows one per second)
+USER_AGENT = 'theframe-controller (https://github.com/exploramus/theframe-integration)'
 
 
 def api_error(status_code, code, message):
@@ -58,6 +63,74 @@ def api_error(status_code, code, message):
     /api/v1 error response: HTTP status plus a stable error code
     '''
     return JSONResponse(status_code=status_code, content={"error": {"code": code, "message": message}})
+
+
+def _rdf_text(root, tag):
+    '''
+    first text of an XMP property such as dc:title (rdf:Alt / rdf:li) in a parsed XMP block
+    '''
+    for prop in root.iter('{http://purl.org/dc/elements/1.1/}' + tag):
+        for item in prop.iter('{http://www.w3.org/1999/02/22-rdf-syntax-ns#}li'):
+            if item.text and item.text.strip():
+                return item.text.strip()
+    return None
+
+
+def _gps_degrees(value, ref):
+    try:
+        degrees = float(value[0]) + float(value[1]) / 60 + float(value[2]) / 3600
+    except (TypeError, ValueError, IndexError, ZeroDivisionError):
+        return None
+    return round(-degrees if ref in ('S', 'W') else degrees, 6)
+
+
+def image_meta(path):
+    '''
+    title, description, capture time and GPS position of an image file, from XMP and EXIF;
+    only the fields found are returned
+    '''
+    meta = {}
+    if HAVE_PIL:
+        try:
+            with Image.open(path) as img:
+                exif = img.getexif()
+            exif_ifd, gps = exif.get_ifd(0x8769), exif.get_ifd(0x8825)
+            taken = exif_ifd.get(0x9003)                     # DateTimeOriginal
+            if taken:
+                taken = datetime.datetime.strptime(str(taken).strip(), '%Y:%m:%d %H:%M:%S').isoformat()
+                offset = str(exif_ifd.get(0x9011) or '').strip()  # OffsetTimeOriginal
+                meta['taken'] = taken + offset if re.fullmatch(r'[+-]\d\d:\d\d', offset) else taken
+            if exif.get(0x010E) and str(exif[0x010E]).strip():  # ImageDescription
+                meta['description'] = str(exif[0x010E]).strip()
+            latitude = _gps_degrees(gps.get(2), gps.get(1))
+            longitude = _gps_degrees(gps.get(4), gps.get(3))
+            if latitude is not None and longitude is not None:
+                meta['latitude'], meta['longitude'] = latitude, longitude
+        except Exception:
+            pass
+    try:
+        with open(path, 'rb') as f:
+            data = f.read()
+    except OSError:
+        return meta
+    for block in re.findall(rb'<x:xmpmeta[\s\S]*?</x:xmpmeta>', data, flags=re.IGNORECASE):
+        try:
+            root = ET.fromstring(block.decode('utf-8', errors='replace'))
+        except ET.ParseError:
+            continue
+        for key in ('title', 'description'):
+            text = _rdf_text(root, key)
+            if text:
+                meta[key] = text
+    return meta
+
+
+def tv_date(meta):
+    '''
+    capture time in the format the TV stores with an upload, or None
+    '''
+    taken = (meta or {}).get('taken')
+    return taken[:19].replace('-', ':').replace('T', ' ') if taken else None
 
 
 class Slideshow:
@@ -455,6 +528,7 @@ class TheFrameController:
             tasks = [] if self.config_error else [
                 asyncio.create_task(self.monitor.run()),
                 asyncio.create_task(self._slideshow_timer()),
+                asyncio.create_task(self.update_metadata()),
             ]
             yield
             for task in tasks:
@@ -499,6 +573,9 @@ class TheFrameController:
         self.log.info(f"Using image folder: {self.folder}")
         self.matte = config.get("matte", "none")
         self.log.info(f"Using matte: {self.matte}")
+        self.place_names = bool(config.get("place_names"))
+        self._places = {}
+        self._resolving_places = False
         if config.get("ip_control") and self.tv_ip:
             token_file = config.get("ip_control_token_file") or os.path.join(
                 os.path.dirname(self.token_file or OPTIONS_FILE), "ipcontrol-token.txt")
@@ -723,7 +800,7 @@ class TheFrameController:
             self.log.error('Error reading file: {}, {}'.format(filename, e))
         return None
 
-    def update_uploaded_files(self, filename, content_id, keywords=None):
+    def update_uploaded_files(self, filename, content_id, keywords=None, meta=None):
         '''
         if file is uploaded, update the dictionary entry
         if content_id is None, file failed to upload, so remove it from the dict
@@ -731,7 +808,8 @@ class TheFrameController:
         keywords_json = json.dumps(keywords if keywords is not None else [])
         self.tv_files.pop(filename, None)
         if content_id:
-            self.tv_files[filename] = {'content_id': content_id, 'keywords': keywords_json, 'modified':self.get_last_updated(filename)}
+            self.tv_files[filename] = {'content_id': content_id, 'keywords': keywords_json, 'modified':self.get_last_updated(filename),
+                                       'meta': meta or {}}
         
     async def upload_files(self, filenames):
         '''
@@ -743,16 +821,18 @@ class TheFrameController:
         for filename in filenames:
             path = os.path.join(self.folder, filename)
             file_data, file_type, exif_tags = self.read_file(path)
+            meta = image_meta(path)
             if file_data and self.tv.art_mode:
                 if known is None:
                     known = set(await self.get_tv_content('MY-C0002') or [])
                 self.log.info('uploading : {} to tv'.format(filename))
-                content_id = await self.tv.upload(file_data, file_type=file_type, matte=self.matte, portrait_matte=self.matte)
+                content_id = await self.tv.upload(file_data, file_type=file_type, matte=self.matte, portrait_matte=self.matte,
+                                                  date=tv_date(meta))
                 if not content_id:
                     content_id = await self.find_unconfirmed_upload(known)
                 if content_id:
                     known.add(content_id)
-                self.update_uploaded_files(filename, content_id, exif_tags)
+                self.update_uploaded_files(filename, content_id, exif_tags, meta)
                 if self.tv_files.get(filename, {}).get('content_id'):
                     self.log.info('uploaded : {} to tv as {}'.format(filename, self.tv_files[filename]['content_id']))
                 else:
@@ -927,6 +1007,7 @@ class TheFrameController:
                 job.ran.set()
         self.publish_status()
         self.events.publish('files', {'file_count': len(self.tv_files)})
+        asyncio.create_task(self.resolve_places())
 
     @staticmethod
     def file_keywords(entry):
@@ -1026,6 +1107,72 @@ class TheFrameController:
             return None
         return next((f for f, v in self.tv_files.items() if v.get('content_id') == content_id), None)
 
+    def fill_metadata(self):
+        '''
+        read the metadata of uploaded files that have none yet (uploaded by versions before 1.5.0);
+        returns the number of entries filled
+        '''
+        filled = 0
+        for filename, entry in list(self.tv_files.items()):
+            path = os.path.join(self.folder or '', filename)
+            if 'meta' not in entry and os.path.isfile(path):
+                entry['meta'] = image_meta(path)
+                filled += 1
+        return filled
+
+    async def update_metadata(self):
+        '''
+        at start: fill missing metadata in the background, then look up place names
+        '''
+        try:
+            if await asyncio.to_thread(self.fill_metadata):
+                self.write_program_data()
+                self.events.publish('files', {'file_count': len(self.tv_files)})
+        except Exception as e:
+            self.log.warning('reading image metadata failed: %s', e)
+        await self.resolve_places()
+
+    async def reverse_geocode(self, client, latitude, longitude):
+        '''
+        place name ("Hamburg, Deutschland") for a position from OpenStreetMap Nominatim;
+        "" if there is none, None if the lookup failed
+        '''
+        response = await client.get(NOMINATIM_URL, params={
+            'format': 'jsonv2', 'lat': latitude, 'lon': longitude, 'zoom': 10})
+        response.raise_for_status()
+        address = response.json().get('address') or {}
+        locality = next((address[k] for k in ('city', 'town', 'village', 'municipality', 'county', 'state') if address.get(k)), None)
+        return ', '.join(p for p in (locality, address.get('country')) if p)
+
+    async def resolve_places(self):
+        '''
+        add place names to uploaded files with a GPS position (option place_names);
+        positions are rounded to about 100 m, each is looked up once
+        '''
+        if not self.place_names or self._resolving_places:
+            return
+        self._resolving_places = True
+        changed = False
+        try:
+            async with httpx.AsyncClient(timeout=10, headers={'User-Agent': USER_AGENT}) as client:
+                for entry in list(self.tv_files.values()):
+                    meta = entry.get('meta') or {}
+                    if 'place' in meta or meta.get('latitude') is None:
+                        continue
+                    key = (round(meta['latitude'], 3), round(meta['longitude'], 3))
+                    if key not in self._places:
+                        self._places[key] = await self.reverse_geocode(client, *key)
+                        await asyncio.sleep(NOMINATIM_DELAY)
+                    meta['place'] = self._places[key]
+                    changed = True
+        except Exception as e:
+            self.log.warning('looking up place names failed, trying again after the next sync: %s', e)
+        finally:
+            self._resolving_places = False
+        if changed:
+            self.write_program_data()
+            self.events.publish('files', {'file_count': len(self.tv_files)})
+
     def status(self):
         '''
         status answered from cached state, never waits for the tv
@@ -1070,6 +1217,7 @@ class TheFrameController:
             "content_id": entry.get("content_id"),
             "keywords": self.file_keywords(entry),
             "modified": entry.get("modified"),
+            **{key: (entry.get("meta") or {}).get(key) for key in META_FIELDS},
         } for filename, entry in self.tv_files.items()]
         items.sort(key=lambda x: x["file_name"].lower())
         return items

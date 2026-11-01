@@ -31,6 +31,8 @@ SERVICE_DELETE_COLLECTION = "delete_collection"
 DATA_STATUS = "status"
 DATA_KEYWORDS = "keywords"
 DATA_FILES = "files"
+# image metadata the add-on reports per file; shown as attributes of the current image sensor
+IMAGE_META_FIELDS = ("title", "description", "taken", "place", "latitude", "longitude")
 
 PLATFORMS = [
     "switch",

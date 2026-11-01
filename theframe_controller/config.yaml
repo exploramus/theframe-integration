@@ -1,5 +1,5 @@
 name: "The Frame Controller"
-version: "1.4.0"
+version: "1.5.0"
 slug: theframe_controller
 url: "https://github.com/exploramus/theframe-integration"
 image: "ghcr.io/exploramus/theframe-controller-{arch}"
@@ -17,6 +17,7 @@ options:
   image_path: "/media/TheFrameImages/"
   matte: "none"
   ip_control: false
+  place_names: false
 schema:
   token_file: str
   tv_ip: str
@@ -26,6 +27,7 @@ schema:
   matte: str
   ip_control: bool
   ip_control_token_file: "str?"
+  place_names: bool
 map:
   - type: share
     read_only: False

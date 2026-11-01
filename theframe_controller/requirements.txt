@@ -1,6 +1,7 @@
 fastapi[standard]
 pillow
 pydantic
+httpx
 wakeonlan
 samsungframetv==4.1.4
 iptcinfo3 @ git+https://github.com/james-see/iptcinfo3
