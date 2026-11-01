@@ -1,95 +1,73 @@
-# The Frame Controller — Home Assistant Integration
+# The Frame Controller for Home Assistant
 
-Companion integration for the [theframe-controller](theframe_controller/) add-on (in this repository).
-Replaces the manual `configuration.yaml` / `automations.yaml` setup with native Home Assistant entities, services, and a media source for image browsing.
+Run a Samsung The Frame in Art Mode from Home Assistant: keep a folder of your own images in sync with the TV, run slideshows by keyword or as playlists, and see in real time what the TV shows — on dashboards, in automations and in Apple Home.
 
-## Status
+The project has two parts, released together with the same version:
 
-The add-on is the engine: TV connection, sync, slideshow state and timer. The integration is a thin adapter over the add-on's `/api/v1`: it receives status changes over the add-on's event stream (polling every 60 s as fallback) and its switches and number only change the add-on's state, which survives restarts of either side.
+| Part | What it does | Install from |
+| --- | --- | --- |
+| **Add-on** ([`theframe_controller/`](theframe_controller/)) | The engine: connection to the TV, image sync, slideshow and its timer, real-time status, HTTP API | Home Assistant add-on store (this repository) |
+| **Integration** ([`custom_components/theframe/`](custom_components/theframe/)) | Home Assistant entities, actions and media browser on top of the add-on | HACS (this repository) |
 
-## Requirements
+The add-on works on its own through its API; the integration needs the add-on.
 
-- `theframe-controller` add-on **1.3.0+** (`/api/v1`); add-on and integration are released together with the same version
-- Home Assistant 2024.x or newer
+## Features
 
-## Repository layout
+- **Image sync** — new images in your folder appear on the TV, changed ones are re-uploaded, deleted ones removed. Runs in the background; if the TV is off the sync waits for Art Mode.
+- **Keyword slideshows** — one switch per keyword from your images' metadata (Photos, Lightroom); turn on the ones you want to see.
+- **Playlists** — an ordered list of images with `theframe.play_files`.
+- **Real-time status** — Art Mode, power state and the current image within about a second, pushed by the TV.
+- **Live image** of what the TV shows, for dashboards.
+- **Media browser** — browse your images with thumbnails, by keyword, and show one on the TV.
+- **Apple Home** — slideshow, keywords and interval through Home Assistant's HomeKit bridge.
+- **Settings survive restarts** — the add-on owns the slideshow state.
 
-This repository holds both parts, released together under one version (tag `vX.Y.Z`):
-
-- `custom_components/theframe/` — the integration (HACS)
-- `theframe_controller/` — the add-on (Home Assistant add-on repository, prebuilt images on GHCR)
-- `tests/` — add-on, contract and API client tests; `tests_ha/` — Home Assistant tests for the integration; `.github/workflows/` — CI
+Tested with a 2022 The Frame (GQ55LS03B); uses [samsungframetv](https://pypi.org/project/samsungframetv/) 4.1.
 
 ## Installation
 
-**Add-on:** in Home Assistant go to **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, add `https://github.com/exploramus/theframe-integration`, then install **The Frame Controller**. If you used the old `exploramus/theframe-controller` repository, uninstall the old add-on first and re-enter its options; tokens and `uploaded_files.json` live in `/media` and are kept.
+**1. Add-on.** **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, add `https://github.com/exploramus/theframe-integration`, install **The Frame Controller**, enter the TV's IP address and start it. On the first connection press **Allow** on the TV. The add-on's **Documentation** tab ([DOCS.md](theframe_controller/DOCS.md)) describes all options.
 
-**Integration:** add this repository to HACS as a custom repository (category *Integration*), or copy `custom_components/theframe/` into your Home Assistant `<config>/custom_components/` directory and restart Home Assistant. Then add the integration via **Settings → Devices & Services → Add Integration → "The Frame Controller"** and enter the add-on URL (default `http://homeassistant.local:5000`).
+**2. Integration.** In HACS add this repository as a custom repository (category *Integration*) and install **The Frame Controller**, or copy `custom_components/theframe/` to `<config>/custom_components/`. Restart Home Assistant, then **Settings → Devices & Services → Add Integration → The Frame Controller** and enter the add-on URL, usually `http://homeassistant.local:5000`.
 
-## What you get
+Keep both at the same version; updates arrive through the add-on store and HACS.
 
-| Entity / feature | Replaces in DOCS.md |
+## Entities
+
+| Entity | Purpose |
 | --- | --- |
-| `switch.the_frame_slideshow` — turns the add-on's slideshow timer on and off | `input_boolean.the_frame_show` + the `time_pattern` slideshow automation |
-| `switch.the_frame_art_<keyword>` (one per keyword, generated dynamically; German umlauts are transliterated so `Blüte` becomes `bluete` instead of `blute`) | All `template:` switches |
-| `number.the_frame_slideshow_interval` | `input_number.theframe_interval` + HomeKit-bridge automations |
-| `select.the_frame_slideshow_interval` — the interval as a choice (1, 2, 3, 5, 10, 15, 20, 30 min); the HomeKit bridge shows it in Apple Home as one switch per option | `input_select.theframe_interval_homekit` + the two interval sync automations |
-| `button.the_frame_sync_files` | `rest_command.sync_files` + `shell_command.image_sync` |
-| `button.the_frame_next_image` / `previous_image` | `rest_command.show_slideshow_*` |
-| `sensor.the_frame_current_image` (with file_name + keywords as attributes) | n/a — new |
-| `sensor.the_frame_image_count`, `sensor.the_frame_slideshow_position` | n/a — new |
-| `binary_sensor.the_frame_in_art_mode`, `binary_sensor.the_frame_sync_pending` | n/a — new |
-| `sensor.the_frame_sync` — sync job state (`idle`, `queued` until art mode, `running`, `done`) with progress attributes | n/a — new |
-| `image.the_frame_current_image` (live thumbnail of what's on the TV) | n/a — new |
-| `media_player.the_frame_player` — accepts Play actions from the media browser, mapped to `show_file` | n/a — new |
-| Services `theframe.show_file`, `show_image`, `sync_files`, `next`, `previous` | `rest_command.*` |
-| Media Source "The Frame" | n/a — new feature: browse images with thumbnails |
+| `switch.the_frame_slideshow` | Slideshow timer on/off |
+| `switch.the_frame_art_<keyword>` | One per keyword; the slideshow shows images with any active keyword. Created automatically; umlauts become `ae`/`oe`/`ue` (`Blüte` → `bluete`) |
+| `number.the_frame_slideshow_interval` | Minutes per image (1–30) |
+| `select.the_frame_slideshow_interval` | The same as a choice (1, 2, 3, 5, 10, 15, 20, 30 min) — Apple Home shows it as one switch per option |
+| `button.the_frame_sync_files` | Sync the image folder with the TV |
+| `button.the_frame_next_image`, `button.the_frame_previous_image` | Step through the slideshow |
+| `image.the_frame_current_image` | Picture of what the TV shows, for picture cards |
+| `sensor.the_frame_current_image` | Content ID of the current image; file name and keywords as attributes |
+| `sensor.the_frame_image_count` | Images uploaded by the add-on |
+| `sensor.the_frame_sync` | Sync state: `idle`, `queued` (waiting for Art Mode), `running`, `done`; progress as attributes |
+| `sensor.the_frame_slideshow_position` | Position in the slideshow (disabled by default) |
+| `binary_sensor.the_frame_in_art_mode` | TV is in Art Mode |
+| `binary_sensor.the_frame_sync_pending` | A sync is waiting for Art Mode |
+| `media_player.the_frame_player` | Target for **Play** in the media browser; next/previous |
 
-> **Note on "Play" in the media browser:** The Frame's art mode is *not* a DLNA renderer — pushing an image to the TV via DLNA does not land in art mode. Pick **The Frame Player** as the target instead; it routes the selection to the `show_file` endpoint and the image appears in art mode within a second.
+Actions: `theframe.show_file`, `theframe.show_image`, `theframe.sync_files`, `theframe.next`, `theframe.previous`, `theframe.play_files` (details in **Developer Tools → Actions**).
 
-The keyword switches appear automatically as soon as the add-on reports new keywords. Turning one on switches the slideshow to keyword mode (replacing a playlist from `theframe.play_files`). No more handwritten `template: - switch:` blocks per keyword.
+## Slideshows
 
-## Image browser
+The slideshow is either in **keyword mode** or in **playlist mode**; switching is always a replacement:
 
-Open the **Media Browser** in HA, select **The Frame**, and you can browse images either flat (*All images*) or grouped by keyword. Thumbnails are served by the add-on's new `/thumbnail/<file_name>` endpoint and proxied through HA so they work in the mobile companion and over Nabu Casa.
+- **Keyword mode:** turn on one or more `switch.the_frame_art_*`. The slideshow shows every image with any of these keywords.
+- **Playlist mode:** call `theframe.play_files` with an ordered list of file names. The keyword switches show off while a playlist runs; turning one on goes back to keyword mode.
 
-To display a clicked image on the TV, call the `theframe.show_file` service with the file name shown in the browser. A simple Lovelace button-card template:
+In both modes the slideshow switch, the interval, the next/previous buttons and the media player work the same way. The timer pauses outside Art Mode and during a sync.
 
-```yaml
-type: button
-tap_action:
-  action: call-service
-  service: theframe.show_file
-  service_data:
-    file_name: sunset.jpg
-```
-
-## Changing the add-on URL after install
-
-If the add-on moves to a different host or port (or you mistyped the URL during initial setup), open **Settings → Devices & Services → The Frame → ⋮ → Reconfigure**. Enter the new URL — entities and their history are kept; only the connection target is swapped.
-
-## Hiding unwanted keywords
-
-Some keywords are housekeeping markers rather than real categories — e.g. `TheFrame` if you tag every uploaded photo with it, or `exportiert` if your photo app sets that as part of the export workflow. Keywords like these would otherwise produce empty-feeling switches and one big media-browser folder containing the whole library.
-
-Open **Settings → Devices & Services → The Frame → Configure** and enter the keywords to hide as a comma-separated list (e.g. `TheFrame, exportiert`). The integration reloads automatically and:
-
-- removes the corresponding `switch.the_frame_art_<keyword>` entities,
-- excludes the per-keyword folders from the Media Browser source,
-- strips the keyword from the file-level metadata exposed by sensors.
-
-Per-image data on the add-on is untouched; the filter is applied client-side in the integration.
-
-## Curated playlists
-
-For ordered, hand-picked image sequences (something keyword filters can't express), call the `theframe.play_files` service with an ordered list of file names. The list becomes the active slideshow — the existing slideshow timer, the next/previous buttons and `media_player.the_frame_player` all walk through it in order.
-
-Define playlists as plain HA scripts:
+Playlists fit well into scripts:
 
 ```yaml
 script:
   the_frame_sunset_show:
-    alias: "TheFrame: Sunset show"
+    alias: "The Frame: Sunset show"
     sequence:
       - action: theframe.play_files
         data:
@@ -97,52 +75,61 @@ script:
             - sunset_01.jpg
             - sunset_02.jpg
             - harbor_evening.jpg
-            - lighthouse.jpg
       - action: switch.turn_on
         target:
           entity_id: switch.the_frame_slideshow
 ```
 
-Calling that script loads the four images in that exact order and turns the auto-advance on. The interval entity (`number.the_frame_slideshow_interval`) controls how long each image stays. To stop the auto-advance, turn the slideshow switch off — the playlist stays loaded so you can step through it manually with `button.the_frame_next_image` / `button.the_frame_previous_image` or via `media_player.the_frame_player`.
-
-Service parameters (full list also visible in **Developer Tools → Services → theframe.play_files**):
-
-| Field | Default | What it does |
+| `play_files` field | Default | Meaning |
 | --- | --- | --- |
-| `file_names` | required | Ordered list of file names exactly as the add-on knows them. Files not on the TV are skipped with a log warning. |
-| `slideshow_index` | `0` | Which item in the list to start at (0-based). |
-| `start` | `true` | Show the first item immediately after loading. Set to `false` if you want to load a playlist but only have it advance on the next timer tick. |
+| `file_names` | required | File names as in the image folder, in order. Files not on the TV are skipped with a warning in the log. |
+| `slideshow_index` | `0` | Position to start at (0-based) |
+| `start` | `true` | Show that image at once; otherwise wait for the next timer step |
 
-### Playlist mode vs. keyword mode
+## Media browser
 
-The slideshow is in exactly one of two modes at any time, and they don't compose:
+**Media → The Frame** lists all images, or the images per keyword, with thumbnails. To show one on the TV, pick **The Frame Player** as the target: the Frame's Art Mode is not a DLNA renderer, so other players would show the image outside Art Mode. Thumbnails are served through Home Assistant and work remotely too.
 
-- **Keyword mode** — driven by the `switch.the_frame_art_*` switches. The set of active switches becomes the keyword filter; the add-on builds the slideshow from images that match any of those keywords.
-- **Playlist mode** — driven by `theframe.play_files`. The slideshow runs through the explicit, ordered file list you handed in.
+## Configuration
 
-Switching modes is a one-way replacement, never an additive operation:
+- **Hide keywords:** **Settings → Devices & Services → The Frame → Configure**, enter keywords to hide (e.g. `TheFrame, exported`). Their switches and media browser folders disappear; the add-on's data is unchanged.
+- **Change the add-on URL:** **⋮ → Reconfigure** on the integration; entities and history are kept.
+- **Apple Home:** expose `switch.the_frame_slideshow`, the keyword switches you want and `select.the_frame_slideshow_interval` in the HomeKit bridge.
 
-- Calling `theframe.play_files` clears all active keyword switches (they show OFF afterwards) and the playlist takes over.
-- Toggling any keyword switch re-enters keyword mode and replaces the playlist with the keyword-filtered set.
+A starter dashboard is in [`dashboards/theframe.yaml`](dashboards/theframe.yaml); its header explains how to add it. Replace the keyword switches with your own.
 
-In both modes, `switch.the_frame_slideshow`, `number.the_frame_slideshow_interval`, the next/previous buttons and the media player work the same way — they just walk through whichever set of files is currently loaded.
+**Images from OneDrive:** the add-on syncs a local folder with the TV. To fill that folder from OneDrive or another cloud, see *Images from OneDrive* in [DOCS.md](theframe_controller/DOCS.md).
 
-Add-on requirement: v1.0.17+ (introduces the `/initialize_slideshow_files` endpoint).
+**Coming from the old YAML setup** (helpers, template switches, `rest_command`s and automations from earlier add-on versions): the integration replaces all of it. Remove those parts after installing the integration; otherwise old automations keep changing the slideshow through deprecated endpoints. The add-on log shows such changes as `slideshow changed via … (deprecated)`.
 
-## Starter dashboard
+## Development
 
-A ready-to-use Lovelace dashboard lives in [`dashboards/theframe.yaml`](dashboards/theframe.yaml). It uses the new `image.the_frame_current_image` entity for a live preview, the `switch`/`number`/`select` entities for slideshow control, a button that opens the Media Browser, and a Categories list of keyword switches. The file's header explains the two ways to install it (raw editor vs. YAML-mode dashboard) and which lines to adjust to match your keyword set.
+```
+custom_components/theframe/   integration
+theframe_controller/          add-on (config.yaml, Dockerfile, app/theframe.py, DOCS.md)
+tests/                        add-on, API client and contract tests, fake TV (fake_tv.py)
+tests_ha/                     Home Assistant tests for the integration
+docs/DESIGN.md                architecture and decisions
+```
 
-## Migrating from the YAML setup
+**Tests.** `tests/` runs with Python 3.11 and the add-on's requirements:
 
-See [MIGRATION.md](MIGRATION.md) for a step-by-step guide that removes the DOCS.md helpers, template switches, automations, rest_command and sensor blocks in the right order — without breaking anything mid-migration.
+```bash
+pip install -r theframe_controller/requirements.txt pytest pyyaml httpx ruff
+ruff check . && pytest
+```
 
-## What still needs the YAML
+`tests/fake_tv.py` stands in for the TV, with responses recorded from a real 2022 Frame. `tests/test_contract.py` checks every endpoint the integration calls against the add-on's OpenAPI document. The Home Assistant tests need Python 3.13:
 
-After migration, all entities from DOCS.md can be removed. The HomeKit bridge configuration stays — it now exports the new `switch.*` and `number.*` entities directly.
+```bash
+pip install pytest-homeassistant-custom-component
+python -m pytest tests_ha -o asyncio_mode=auto
+```
 
-The OneDrive sync via `rclone` still lives in the add-on (`image_sync.sh`). The integration's *Sync Files* button only triggers `/sync_files` (TV ↔ local folder reconciliation). If you want the rclone step to run from HA, keep the `shell_command: image_sync` line, or wrap it with a script.
+**CI** runs lint, both test suites, hassfest, HACS validation, the add-on linter and image builds for aarch64 and amd64 on every pull request. `main` is protected: changes go through pull requests with passing checks.
+
+**Releases.** Set the same version in `theframe_controller/config.yaml` and `custom_components/theframe/manifest.json`, add a line to `theframe_controller/CHANGELOG.md`, merge, then push a tag `vX.Y.Z`. The release workflow checks the versions, publishes the add-on images to `ghcr.io/exploramus/theframe-controller-{arch}` and creates the GitHub release for HACS. Release tags cannot be moved or deleted.
 
 ## License
 
-GPL-3.0, see [LICENSE](LICENSE). The add-on depends on [samsungframetv](https://pypi.org/project/samsungframetv/) (LGPL-3.0).
+GPL-3.0, see [LICENSE](LICENSE). The add-on uses [samsungframetv](https://pypi.org/project/samsungframetv/) (LGPL-3.0).
