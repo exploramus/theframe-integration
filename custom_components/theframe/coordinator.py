@@ -100,8 +100,12 @@ class TheFrameCoordinator(DataUpdateCoordinator[dict]):
         """Keep the add-on's event stream open; reconnect with back-off when it drops."""
         delay = EVENTS_RETRY_MIN
         while True:
+            connected = False
             try:
                 async for event, data in self.api.events():
+                    if not connected:
+                        _LOGGER.debug("Event stream connected")
+                        connected = True
                     delay = EVENTS_RETRY_MIN
                     if event == "status" and self.data is not None:
                         self.async_set_updated_data({**self.data, DATA_STATUS: data})

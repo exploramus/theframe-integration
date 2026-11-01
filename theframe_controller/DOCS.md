@@ -12,7 +12,7 @@ Key controls such as the interval between images, the keywords to select images,
 
 ### TV connection and power state
 
-The add-on starts and answers requests immediately, whether or not the TV is reachable; it never wakes the TV on its own. A background monitor checks the TV's power state every 10 seconds while it is on, and backs off up to 60 seconds while it is off or in standby. `/status` reports the cached result, so it never waits for the TV:
+The add-on starts and answers requests immediately, whether or not the TV is reachable; it never wakes the TV on its own. The add-on keeps the TV's art connection open and reacts to the events the TV pushes on it (art mode on/off, image changed, standby, wake-up), so those changes show up within about a second. A background monitor also checks the power state as a safety net: every 30 seconds while the event connection is open, every 10 seconds otherwise (also in standby), backing off up to 30 seconds only while the TV does not answer at all (for example when it is switched off completely). `/status` reports the cached result, so it never waits for the TV:
 
 | Field | Meaning |
 | --- | --- |
@@ -22,6 +22,8 @@ The add-on starts and answers requests immediately, whether or not the TV is rea
 | `art_service_available` | `false` while the TV's art service stopped answering and requests are paused (30 s, doubling up to 240 s) |
 | `ip_control` | `disabled`, `unpaired` or `paired` |
 | `error` | Last problem reaching the TV, if any |
+| `tv_events` | `true` while the TV's event connection is open |
+| `event_clients` | Open event stream connections; 1 when the integration is connected, 0 means it falls back to polling every 60 s |
 
 Commands that need art mode (`/show_image`, `/show_file`, `/show_slideshow_*`, `/reconcile_files`) return `{"status": "error", "error": "TV is not in art mode"}` at once when the TV is not in art mode.
 

@@ -41,11 +41,14 @@ from samsungframetv.async_art import SamsungTVAsyncArt
 OPTIONS_FILE = os.environ.get("THEFRAME_OPTIONS", "/data/options.json")
 
 POLL_INTERVAL = 10          # seconds between power state checks while the TV is on
-POLL_INTERVAL_MAX = 60      # back-off limit while the TV is off or in standby
+POLL_INTERVAL_EVENTS = 30   # same, while the TV's event connection is open and pushes changes itself
+POLL_INTERVAL_MAX = 30      # back-off limit while the TV does not answer at all
 TV_CALL_TIMEOUT = 30        # outer safety net around TV calls, the library has its own timeouts
 TV_CHECK_TIMEOUT = 15       # power state check; the library's async REST calls have no timeout of their own
 TV_CONNECT_TIMEOUT = 10     # client timeout: sync REST call in the constructor and websocket open
 TV_ON_STATES = ('tv', 'art', 'on')
+# events the TV pushes on the art channel; recorded on a 2022 Frame (GQ55LS03B)
+TV_EVENTS = ('art_mode_changed', 'image_selected', 'go_to_standby', 'wakeup')
 SYNC_RETRY_DELAY = 60       # seconds before a failed sync is retried
 SLIDESHOW_TICK = 5          # seconds between slideshow timer checks
 EVENT_KEEPALIVE = 15        # seconds between keep-alive comments on the event stream
@@ -135,6 +138,7 @@ class EventHub:
     '''
 
     def __init__(self):
+        self.log = logging.getLogger('Main.'+__class__.__name__)
         self.queues = set()
 
     def publish(self, event, data):
@@ -149,6 +153,7 @@ class EventHub:
     async def stream(self, first_event):
         queue = asyncio.Queue(maxsize=100)
         self.queues.add(queue)
+        self.log.info('event stream client connected ({} open)'.format(len(self.queues)))
         try:
             yield self.format(*first_event)
             while True:
@@ -159,6 +164,7 @@ class EventHub:
                     yield ': keepalive\n\n'
         finally:
             self.queues.discard(queue)
+            self.log.info('event stream client disconnected ({} open)'.format(len(self.queues)))
 
 
 class TVMonitor:
@@ -167,11 +173,12 @@ class TVMonitor:
     endpoints read the cached state and never wait for the TV
     '''
 
-    def __init__(self, mon, interval=POLL_INTERVAL, interval_max=POLL_INTERVAL_MAX):
+    def __init__(self, mon, interval=POLL_INTERVAL, interval_max=POLL_INTERVAL_MAX, interval_events=POLL_INTERVAL_EVENTS):
         self.log = logging.getLogger('Main.'+__class__.__name__)
         self.mon = mon
         self.interval = interval
         self.interval_max = interval_max
+        self.interval_events = interval_events
         self.state = 'unknown'      # off, standby, tv, art, on (art mode unknown), unknown before the first check
         self.since = None
         self.last_check = None
@@ -187,6 +194,43 @@ class TVMonitor:
     def tv_on(self):
         return self.state in TV_ON_STATES
 
+    @property
+    def events_connected(self):
+        '''
+        True while the art channel is open, so the TV pushes art mode, image and standby changes
+        '''
+        return self.mon.tv is not None and self.mon.tv.is_alive()
+
+    def listen(self, tv):
+        for name in TV_EVENTS:
+            tv.set_callback(name, self.on_tv_event)
+
+    def on_tv_event(self, event, response):
+        '''
+        update the cached state the moment the TV reports a change; the checks remain as a safety net
+        '''
+        try:
+            data = json.loads(response.get('data') or '{}')
+        except (AttributeError, ValueError):
+            return
+        name = data.get('event')
+        self.log.debug('TV event: {}'.format(data))
+        if name == 'art_mode_changed':
+            self.set_state('art' if data.get('status') == 'on' else 'tv')
+            if not self.in_artmode:
+                self.current_content_id = None
+            else:
+                self.poke()             # the check fetches the current image and starts a queued sync
+        elif name == 'image_selected' and self.in_artmode:
+            # the TV also announces images while in standby; only art mode shows them
+            self.current_content_id = data.get('content_id') or self.current_content_id
+        elif name == 'go_to_standby':
+            self.set_state('standby')
+            self.current_content_id = None
+        elif name == 'wakeup':
+            self.poke()
+        self.mon.publish_status()
+
     def poke(self):
         '''
         check again now, e.g. after a wake request
@@ -198,15 +242,21 @@ class TVMonitor:
         while True:
             previous = self.state
             await self.check()
-            if self.state in TV_ON_STATES or self.state != previous:
-                delay = self.interval
-            else:
-                delay = min(delay * 2, self.interval_max)
+            delay = self.next_delay(previous, delay)
             try:
                 await asyncio.wait_for(self._wakeup.wait(), delay)
             except asyncio.TimeoutError:
                 pass
             self._wakeup.clear()
+
+    def next_delay(self, previous, delay):
+        '''
+        seconds until the next check; standby answers quickly and can turn into art mode any moment
+        (motion sensor, remote), so only back off while the TV does not answer at all
+        '''
+        if self.state in ('off', 'unknown') and self.state == previous:
+            return min(delay * 2, self.interval_max)
+        return self.interval_events if self.events_connected else self.interval
 
     async def check(self):
         '''
@@ -217,6 +267,7 @@ class TVMonitor:
             try:
                 async with asyncio.timeout(TV_CALL_TIMEOUT):
                     self.mon.tv = await asyncio.to_thread(self.mon.create_tv)
+                self.listen(self.mon.tv)
             except Exception as e:
                 self.error = 'cannot create TV client: {}'.format(e)
                 self.log.warning(self.error)
@@ -923,10 +974,15 @@ class TheFrameController:
         self.publish_status()
         return content_id, None
 
-    def update_slideshow(self, **changes):
-        for k, v in changes.items():
-            if v is not None:
-                setattr(self.slideshow, k, v)
+    def update_slideshow(self, source, **changes):
+        '''
+        change slideshow settings; source (the endpoint) is logged, so unexpected changes can be traced
+        '''
+        changed = {k: v for k, v in changes.items() if v is not None and getattr(self.slideshow, k) != v}
+        if changed:
+            self.log.info('slideshow changed via {}: {}'.format(source, changed))
+        for k, v in changed.items():
+            setattr(self.slideshow, k, v)
         self.slideshow.save()
         self.publish_status()
 
@@ -977,8 +1033,10 @@ class TheFrameController:
             "power_state_since": self.monitor.since,
             "last_check": self.monitor.last_check,
             "art_service_available": self.tv.art_service_available if self.tv is not None else None,
+            "tv_events": self.monitor.events_connected,
             "ip_control": "paired" if self.paired_ip_control() else ("unpaired" if self.ip_control else "disabled"),
             "error": self.monitor.error,
+            "event_clients": len(self.events.queues),
         }
 
     def publish_status(self):
@@ -1105,7 +1163,7 @@ class TheFrameController:
                 # keep the running slideshow instead of wiping it for a filter without matches
                 return {"status": "error", "error": "No valid slideshow files found"}
             index = req.slideshow_index if 0 <= req.slideshow_index < len(matched) else 0
-            self.update_slideshow(mode='keywords', keywords=list(req.keyword_list), position=index - 1)
+            self.update_slideshow('/initialize_slideshow (deprecated)', mode='keywords', keywords=list(req.keyword_list), position=index - 1)
             return {"status": "success", "slideshow": matched, "index": index}
 
         @self.app.post("/initialize_slideshow_files")
@@ -1126,7 +1184,7 @@ class TheFrameController:
                     "missing": missing,
                 }
             index = req.slideshow_index if 0 <= req.slideshow_index < len(accepted) else 0
-            self.update_slideshow(mode='files', files=accepted, position=index - 1)
+            self.update_slideshow('/initialize_slideshow_files (deprecated)', mode='files', files=accepted, position=index - 1)
             return {"status": "success", "count": len(accepted), "missing": missing, "index": index}
 
         async def legacy_slideshow_show(position):
@@ -1355,7 +1413,7 @@ class TheFrameController:
             changes = req.model_dump(exclude_none=True)
             if "files" in changes:
                 changes["files"] = list(dict.fromkeys(changes["files"]))
-            self.update_slideshow(**changes)
+            self.update_slideshow('PUT /api/v1/slideshow', **changes)
             return dict(self.slideshow.as_dict(), count=len(self.playlist()))
 
         async def v1_slideshow_show(position):

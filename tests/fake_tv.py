@@ -31,6 +31,8 @@ class FakeFrameTV:
         self.leave_art_after_upload = None      # switch to 'tv' after this upload (1-based)
         self.unconfirmed_uploads = False        # add the image but return None, like a missed image_added
         self._next_id = 9000
+        self.callbacks = {}
+        self.connected = True           # art channel open, so events can be pushed
 
     @property
     def art_mode(self):
@@ -57,6 +59,21 @@ class FakeFrameTV:
     async def get_power_state(self, ip_control=None):
         await self._answer()
         return self.power
+
+    def set_callback(self, trigger, callback=None):
+        if callback is None:
+            self.callbacks.pop(trigger, None)
+        else:
+            self.callbacks[trigger] = callback
+
+    def is_alive(self):
+        return self.connected and self.power != "off"
+
+    def push(self, event, **data):
+        '''the TV pushes an event, delivered like the library's process_event does'''
+        callback = self.callbacks.get(event)
+        if callback:
+            callback("d2d_service_message", {"event": "d2d_service_message", "data": json.dumps(dict(data, event=event))})
 
     def reset_art_service(self):
         self.reset_calls += 1

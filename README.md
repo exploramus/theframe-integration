@@ -33,6 +33,7 @@ This repository holds both parts, released together under one version (tag `vX.Y
 | `switch.the_frame_slideshow` — turns the add-on's slideshow timer on and off | `input_boolean.the_frame_show` + the `time_pattern` slideshow automation |
 | `switch.the_frame_art_<keyword>` (one per keyword, generated dynamically; German umlauts are transliterated so `Blüte` becomes `bluete` instead of `blute`) | All `template:` switches |
 | `number.the_frame_slideshow_interval` | `input_number.theframe_interval` + HomeKit-bridge automations |
+| `select.the_frame_slideshow_interval` — the interval as a choice (1, 2, 3, 5, 10, 15, 20, 30 min); the HomeKit bridge shows it in Apple Home as one switch per option | `input_select.theframe_interval_homekit` + the two interval sync automations |
 | `button.the_frame_sync_files` | `rest_command.sync_files` + `shell_command.image_sync` |
 | `button.the_frame_next_image` / `previous_image` | `rest_command.show_slideshow_*` |
 | `sensor.the_frame_current_image` (with file_name + keywords as attributes) | n/a — new |

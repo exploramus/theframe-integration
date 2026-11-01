@@ -92,6 +92,8 @@ Notes:
 - All TV calls rely on the library's timeouts, with an outer `asyncio.timeout` as a safety net.
 - Waking the TV (IP Control `power_on()`, else WOL) only on explicit request, never at startup.
 
+- **TV push events** (add-on 1.3.1): recorded on our 2022 Frame, the art channel pushes `art_mode_changed` (`status` on/off), `image_selected` (`content_id`; also sent in standby, ignored there), `go_to_standby` and `wakeup` (plus `recently_set_updated`, ignored). The connection stayed open through standby. The monitor registers callbacks for these and updates the cached state at once; checks remain as a safety net (30 s while the art channel is open, 10 s otherwise, back-off to 30 s while the TV does not answer). Measured with the real TV: changes reach `/api/v1/events` within about a second.
+
 ### 3.2 Pending intents
 - Commands needing art mode either return a clear error (409/503) or are accepted and queued.
 - Optional `wake: true`: send WOL, wait for art mode, then execute.
