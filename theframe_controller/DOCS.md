@@ -64,7 +64,7 @@ The add-on owns the slideshow and its timer:
 
 **Collections** are named presets of either kind: a *manual* collection (an ordered list of files) or a *keyword* collection. Loading a collection makes it the active one, starting at its first image. The slideshow then plays the collection as it is: if the collection is changed while it plays, the slideshow continues after the image it showed last, in the new order; if that image was removed, it continues with the image that followed it. Changing keywords or files directly leaves the collection. Files in a manual collection that are no longer on the TV stay in the collection, are skipped and reported as `missing`. The integration shows the collections as one select.
 
-Each collection has a stable ID, a revision number that every save increases, and the time and user of the last change.
+Each collection has a stable ID, a revision number that every change increases, and the time and user of the last change. Changes are applied one at a time, so several people can edit collections at once: moves and inserts refer to a neighbouring file name, not a position, and combine with each other's edits. Every change is logged in `/data/history.json` (the last 100 changes per collection and everything from the last 30 days), so it can be undone, a collection can be returned to an earlier revision, and deleted collections can be restored.
 
 Interval, on/off, mode, keywords or playlist, the active collection, the collections and the image shown last are saved and survive restarts. The slideshow stores file names and looks up the TV's content ID when it shows an image, so re-uploading a changed file does not break it. The timer pauses outside Art Mode and while a sync is running.
 
@@ -149,13 +149,19 @@ The integration uses the versioned API under `/api/v1`. Its full description is 
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/v1/status` | Power state, current image, slideshow, current sync job |
-| `GET /api/v1/events` | Server-sent events: `status` (on connect and whenever it changes), `files` (after a sync) |
+| `GET /api/v1/events` | Server-sent events: `status` (on connect and whenever it changes), `files` (after a sync), `collection` (after every collection change, with the change, collection, revision and user) |
 | `GET /api/v1/files`, `GET /api/v1/keywords` | Uploaded files with keywords, `title`, `description`, `taken`, `place`, `latitude`, `longitude`; all keywords |
 | `POST /api/v1/sync` | Start a sync job: `202` with the job; `409` while one is queued or running |
 | `POST /api/v1/show` | Show `{"file_name": "..."}` or `{"content_id": "..."}` |
 | `GET`, `PUT /api/v1/slideshow` | Slideshow settings: `enabled`, `interval_minutes`, `mode` (`keywords` or `files`), `keywords`, `files`, `position`; `{"collection": "name"}` loads a collection |
 | `GET /api/v1/collections` | Collections with `id`, `kind` (`manual` or `keywords`), keywords or files, `missing` files, the number of images, `revision`, `updated`, `updated_by` |
 | `PUT`, `DELETE /api/v1/collections/{name}` | Save a collection (`{"keywords": [...]}`, `{"files": [...]}`, or `{}` for the current slideshow); saving under an existing name keeps its ID; delete one |
+| `POST /api/v1/collections/changes` | Apply one change: `{"id": "<change ID>", "change": "...", "collection": "<collection ID>", ...}` with `create` (`name`, `kind`, `files` or `keywords`), `add` (`files`, optional `after`), `remove` (`files`), `move` (`files`, `after`), `set_keywords`, `rename` (`name`), `delete`. `after` is the file to insert after, `null` for the start, left out for the end. A change ID sent again is not applied twice |
+| `GET /api/v1/collections/{id}/history` | Changes of one collection, newest first |
+| `POST /api/v1/collections/{id}/undo` | Undo your own last change to the collection |
+| `POST /api/v1/collections/{id}/restore` | Return a collection to a revision (`{"revision": n}`), also a deleted one |
+| `GET /api/v1/collections/deleted` | Deleted collections that can still be restored |
+| `GET /api/v1/collections/export`, `POST /api/v1/collections/import` | All collections as JSON; import adds them, a taken name gets a number |
 | `POST /api/v1/slideshow/next`, `/previous`, `/show` | Step through the slideshow, or show `{"position": n}` |
 | `GET /api/v1/settings` | The TV's Art Mode settings (brightness, colour temperature, motion sensor) |
 | `POST /api/v1/power_on` | Switch the TV on (IP Control or Wake-on-LAN) |
@@ -163,7 +169,7 @@ The integration uses the versioned API under `/api/v1`. Its full description is 
 | `GET /api/v1/thumbnail/{file}?size=320` | JPEG thumbnail of an image file |
 | `POST /api/v1/reconcile` | Recover content IDs missing from `json_path` by comparing the TV's thumbnails with the image files (slow; only needed after `json_path` was lost) |
 
-Errors use HTTP status codes with a body `{"error": {"code": "...", "message": "..."}}`. Codes: `not_configured` (503); `tv_not_in_art_mode`, `tv_not_on`, `job_conflict`, `empty_slideshow`, `wake_unavailable`, `ip_control_disabled` (409); `not_found` (404); `invalid_request`, `invalid_image` (422); `not_available` (501); `tv_error` (502).
+Errors use HTTP status codes with a body `{"error": {"code": "...", "message": "..."}}`. Codes: `not_configured` (503); `tv_not_in_art_mode`, `tv_not_on`, `job_conflict`, `empty_slideshow`, `wake_unavailable`, `ip_control_disabled`, `name_taken`, `collection_deleted`, `nothing_to_undo` (409); `not_found` (404); `invalid_request`, `invalid_image`, `invalid_change` (422); `not_available` (501); `tv_error` (502).
 
 The unversioned endpoints of versions before 1.4.0 (`/status`, `/sync_files`, `/show_file`, `/initialize_slideshow`, …) are gone; use the integration's entities and actions, or `/api/v1`.
 

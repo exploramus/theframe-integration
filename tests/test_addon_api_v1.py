@@ -234,7 +234,7 @@ def test_deleting_the_active_collection_keeps_the_slideshow(addon):
     addon.client.put("/api/v1/collections/Sea", json={"keywords": ["Sea"]})
     addon.client.put("/api/v1/slideshow", json={"collection": "Sea"})
 
-    assert addon.client.delete("/api/v1/collections/Sea").json() == {"deleted": "Sea"}
+    assert addon.client.delete("/api/v1/collections/Sea").json()["deleted"] == "Sea"
     slideshow = addon.client.get("/api/v1/slideshow").json()
     assert (slideshow["collection"], slideshow["keywords"], slideshow["count"]) == (None, ["Sea"], 1)
     assert addon.client.delete("/api/v1/collections/Sea").status_code == 404
