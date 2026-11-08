@@ -17,6 +17,7 @@ The add-on works on its own through its API; the integration needs the add-on.
 - **Keyword slideshows** — one switch per keyword from your images' metadata (Photos, Lightroom); turn on the ones you want to see.
 - **Playlists** — an ordered list of images with `theframe.play_files`.
 - **Collections** — named presets (a keyword set or a playlist), picked from one select; one tile in Apple Home instead of a switch per keyword.
+- **Collections editor** — *Frame Collections* in Home Assistant's sidebar: pick images with search by keyword, place, title and date, arrange their order by drag and drop, with live updates for several users, undo and history.
 - **Real-time status** — Art Mode, power state and the current image within about a second, pushed by the TV.
 - **Live image** of what the TV shows, for dashboards, with title, date and place from the image files.
 - **Media browser** — browse your images with thumbnails, by keyword, and show one on the TV.
@@ -146,6 +147,7 @@ custom_components/theframe/   integration
 theframe_controller/          add-on (config.yaml, Dockerfile, app/theframe.py, DOCS.md)
 tests/                        add-on, API client and contract tests, fake TV (fake_tv.py)
 tests_ha/                     Home Assistant tests for the integration
+tests_e2e/                    browser tests of the collections editor (Playwright)
 docs/DESIGN.md                architecture and decisions
 ```
 
@@ -163,7 +165,15 @@ pip install pytest-homeassistant-custom-component
 python -m pytest tests_ha -o asyncio_mode=auto
 ```
 
-**CI** runs lint, both test suites, hassfest, HACS validation, the add-on linter and image builds for aarch64 and amd64 on every pull request. `main` is protected: changes go through pull requests with passing checks.
+The collections editor's browser tests need Playwright and Chromium:
+
+```bash
+pip install pytest-playwright
+python -m playwright install chromium
+python -m pytest tests_e2e
+```
+
+**CI** runs lint, all three test suites, hassfest, HACS validation, the add-on linter and image builds for aarch64 and amd64 on every pull request. `main` is protected: changes go through pull requests with passing checks.
 
 **Releases.** Set the same version in `theframe_controller/config.yaml` and `custom_components/theframe/manifest.json`, add a line to `theframe_controller/CHANGELOG.md`, merge, then push a tag `vX.Y.Z`. The release workflow checks the versions, publishes the add-on images to `ghcr.io/exploramus/theframe-controller-{arch}` and creates the GitHub release for HACS. Release tags cannot be moved or deleted.
 

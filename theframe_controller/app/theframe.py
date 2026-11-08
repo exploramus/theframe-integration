@@ -8,7 +8,8 @@
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from typing import Literal, Optional
 from contextlib import asynccontextmanager
 import contextlib
@@ -54,6 +55,7 @@ TV_EVENTS = ('art_mode_changed', 'image_selected', 'go_to_standby', 'wakeup')
 SYNC_RETRY_DELAY = 60       # seconds before a failed sync is retried
 SLIDESHOW_TICK = 5          # seconds between slideshow timer checks
 EVENT_KEEPALIVE = 15        # seconds between keep-alive comments on the event stream
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
 HISTORY_KEEP = 100          # changes kept per collection, plus everything younger than HISTORY_MAX_AGE
 HISTORY_MAX_AGE = 30 * 86400
 META_FIELDS = ('title', 'description', 'taken', 'place', 'latitude', 'longitude')
@@ -670,6 +672,9 @@ class TheFrameController:
                     await self.tv.close()
 
         self.app = FastAPI(lifespan=lifespan)
+        # collections editor, shown in Home Assistant's sidebar through Ingress (ingress_entry: editor/)
+        self.app.mount("/editor", StaticFiles(directory=STATIC_DIR, html=True), name="editor")
+        self.app.add_api_route("/", lambda: RedirectResponse("editor/"), include_in_schema=False)
         logging.basicConfig(level=logging.INFO)
         self.log = logging.getLogger('Main.'+__class__.__name__)
         self.tv_files = {}
