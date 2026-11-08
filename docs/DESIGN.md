@@ -1,6 +1,6 @@
 # TheFrame – Architecture & Development Environment Design
 
-Status: agreed design, 2026-10-31 (rev. 2: samsungframetv 4.1.4 reviewed; rev. 3, 2026-11-01: image sources stay outside, decision 6). Basis: code review of `exploramus/theframe-controller` (add-on, v1.0.17.001) and `exploramus/theframe-integration` (integration, v0.1.0), GitHub state of 2026-05-04.
+Status: agreed design, 2026-10-31 (rev. 2: samsungframetv 4.1.4 reviewed; rev. 3, 2026-11-01: image sources stay outside, decision 6; rev. 4, 2026-11-08: collections editor, decision 7 and section 3.8). Basis: code review of `exploramus/theframe-controller` (add-on, v1.0.17.001) and `exploramus/theframe-integration` (integration, v0.1.0), GitHub state of 2026-05-04.
 
 ## 1. Decisions
 
@@ -13,6 +13,8 @@ Status: agreed design, 2026-10-31 (rev. 2: samsungframetv 4.1.4 reviewed; rev. 3
 6. **Image sources stay outside** (decided 2026-11-01). The add-on's contract is a local folder (`image_path`); how images get there is not part of the add-on or the integration, and no cloud sync is built in, not even a generic rclone step. Reasons: OneDrive is one of many possible sources; existing tools already cover them (rclone for 70+ cloud providers, the Samba share add-on, Syncthing, a Photos export from a Mac); keeping sources out keeps the add-on small and general. Today an HA automation runs `image_sync.sh` (rclone) and starts a TV sync only when it reports `changed`; DOCS.md shows it as a recipe.
    - If convenience is wanted later: one generic step (rclone bundled in the image, options for remote and schedule) rather than a plugin architecture; plugins only for sources that are not files.
    - iCloud shared albums: readable without login when "Public Website" is on, through undocumented web endpoints; but Apple stores shared-album photos at reduced resolution (about 2048 px long edge, to be confirmed) against the TV's 3840 × 2160, keywords are probably lost, and the album is public via its link. The full iCloud library needs an Apple ID login with 2FA that has to be renewed. Only worth a test with a real album before any decision.
+
+7. **Collections editor in the add-on, served through Ingress** (decided 2026-11-08). The add-on owns the collections and the image metadata, so the editor talks to the add-on's API directly: no proxy layer in the integration and no second copy of the data. Home Assistant shows it in the sidebar with its own login, also in the companion app. Rejected: an integration panel (`panel_custom`), which would need integration WebSocket commands for every editor call and an HA restart for UI changes; a Lovelace card, which needs its own HACS frontend package and is cramped for hundreds of thumbnails. Design in section 3.8.
 
 ## 2. Findings from the code review
 
@@ -125,6 +127,113 @@ Notes:
 - Snapshot of the TV's "My Photos" list before destructive operations.
 - Separate dev token; pause production slideshow during live tests.
 
+### 3.8 Collections editor
+
+**Requirements.**
+
+1. Works within Home Assistant.
+2. Select and unselect images for a collection.
+3. Add, change, delete and rename collections.
+4. Search images by keywords, place, title, capture time and other metadata.
+5. Collection changes reach Apple Home.
+6. Manual order of the images in a collection.
+7. Robust: no data or metadata at risk when Home Assistant fails or restarts, when connections drop, or when several users edit at the same time.
+
+**Today (1.5.0).** Collections live in the add-on's `/data/state.json` next to the slideshow, keyed by name: `{"mode": "keywords", "keywords": [...]}` or `{"mode": "files", "files": [...]}`. Loading a collection copies its keywords or file list into the slideshow; the slideshow remembers its position as an index. `PUT`/`DELETE /api/v1/collections/{name}` replace or remove a whole collection; there is no rename, no revision and no history. Writes are atomic (temporary file, `os.replace`).
+
+#### Data model
+
+- **Two kinds:** *manual* collections (an ordered list of file names; the stored order is the order on the TV) and *keyword* collections, which stay as they are: their images are whatever carries the keywords, in the add-on's order, with no sort rule and no manual order.
+- **Stable IDs:** every collection gets an internal ID (`uuid4`) next to its name. Changes, the slideshow and the history refer to the ID; a rename by one user does not interrupt another user's editing or a playing slideshow. The integration's select and Apple Home keep showing names.
+- **Revision:** each collection has a revision number, increased by every change, plus `updated` (time) and `updated_by` (user).
+- **Slideshow refers to the collection.** Loading a collection stores its ID in the slideshow instead of copying its list, and the slideshow remembers the **current file name** instead of an index. If someone reorders or edits the collection while it plays, the slideshow continues from the same image in the new order. If that image was removed, it continues with the image that followed it. Changing keywords or files by hand still leaves the collection, as today.
+- **Missing files are kept, not dropped.** A file name in a manual collection whose file is no longer uploaded stays in the list and is reported (`missing`). The slideshow skips it; the editor shows it greyed out with *Remove from collection*.
+- **Migration:** existing collections get IDs and revision 1 on the first start of the new version; `files` collections become manual, `keywords` collections stay keyword collections. The slideshow's index is converted to the file name it points at.
+
+#### Changes instead of whole-collection saves
+
+The editor sends each action as it happens; the add-on applies one change at a time to the current state, writes it atomically and announces it on the event stream. There is no draft and no *Save* button.
+
+| Change | Fields | Applied as |
+| --- | --- | --- |
+| `create` | name, kind, files or keywords | new collection; refused if the name is taken |
+| `add` | files, optional `after` | inserted after the anchor file, or at the end; files already in the collection are skipped |
+| `remove` | files | removed where they are |
+| `move` | files, `after` (file name or none for the start) | moved as a block after the anchor, in the order given |
+| `set_keywords` | keywords | keyword collections only |
+| `rename` | name | refused if the name is taken |
+| `delete` | — | removed; restorable from the history |
+
+- **Anchors are file names, not positions.** "After Y" stays correct when someone else has meanwhile inserted or moved images in front of it. If the anchor is gone, the files go to the end. Most concurrent edits therefore combine without a conflict: two users adding, one adding while the other moves, two moves of different images.
+- **Change IDs and retries:** every change carries an ID made by the browser (`uuid4`). The add-on remembers the IDs of the last 1,000 changes with their result; a change sent again (for example after a dropped connection) is answered with the stored result instead of being applied twice.
+- **Serialisation:** one `asyncio.Lock` around apply, write and publish. One process owns the state, so no file locking is needed.
+- **Real conflicts are shown, not resolved silently:**
+
+| Situation | Behaviour |
+| --- | --- |
+| Collection deleted while another user edits it | The change is refused (`collection_deleted`); the editor says so and offers *Restore* |
+| Name already taken (create, rename) | Refused (`name_taken`) with a message |
+| Two renames at the same time | The later one wins; both are in the history |
+| `set_keywords` from two users | The later one wins; both are in the history |
+
+#### History, undo and restore
+
+- The add-on keeps a log per collection in `/data/history.json`: change, result, time, user, revision. Kept: the last 100 changes per collection and anything younger than 30 days. Written atomically like `state.json`.
+- **Undo** reverts the user's own last change by applying its inverse (`add` ↔ `remove`, `move` back after its previous anchor, `rename` back), even if others changed the collection in between. Undo of a `delete` restores the collection with its ID.
+- **Restore this version** returns a collection to its state at a revision, as one new change (so it can be undone too). Deleted collections are listed and restorable while their history is kept.
+- **Export and import:** all collections as one JSON file (`GET /api/v1/collections/export`, `POST /api/v1/collections/import`); import adds collections and renames on name clashes, it never overwrites. `/data` is part of every Home Assistant backup as before.
+
+#### Users and access
+
+- Behind Ingress the Supervisor passes the logged-in user (`X-Remote-User-Id`, `X-Remote-User-Name`, `X-Remote-User-Display-Name`). The add-on records it in the history; changes without these headers (integration actions, direct API calls) are recorded as "Home Assistant".
+- **Access:** add-on panels are visible to administrators only by default. The panel is opened to all users (`panel_admin: false` in `config.yaml`), so family members can curate; every change is in the history and restorable. Changing this back is a one-line config change.
+- Optional presence: the editor shows who else has the same collection open, from the event stream's connected editors.
+
+#### API additions
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/v1/collections` | As today, plus `id`, `kind`, `revision`, `updated`, `updated_by`, `missing` |
+| `POST /api/v1/collections/changes` | Apply one change (`{"id", "change", "collection", ...}`); returns the collection with its new revision, or an error |
+| `GET /api/v1/collections/{id}/history` | Log of one collection |
+| `POST /api/v1/collections/{id}/undo` | Undo the requesting user's last change |
+| `POST /api/v1/collections/{id}/restore` | Restore a revision, also for deleted collections |
+| `GET /api/v1/collections/export`, `POST /api/v1/collections/import` | Export and import |
+
+- Event stream: new `collection` events (change, collection, revision, user) after every change, so editors and the integration update within a second.
+- `PUT`/`DELETE /api/v1/collections/{name}` and `PUT /api/v1/slideshow {"collection": name}` stay for the integration's actions (`save_collection`, `delete_collection`, the select); they are applied through the same change path, so they are serialised, logged and announced like editor changes.
+- New error codes: `name_taken`, `collection_deleted` (409); `invalid_change` (422).
+
+#### Editor (Ingress panel)
+
+- **Layout:** list of collections on the left (image count, *New*, *Rename*, *Duplicate*, *Delete*); thumbnail grid in the middle; for manual collections a filmstrip with the collection's order below the grid.
+- **Selecting:** click adds an image to or removes it from the open manual collection, Shift-click selects a range, *Select all results* adds every image the current search shows. Keyword collections show the keyword choice instead of the selection grid.
+- **Manual order:** drag and drop in the filmstrip, with handles that work by touch; *Move to start* / *Move to end*; moving several selected images at once; keyboard shortcuts. *Sort by capture time / title / file name* is a one-time action that rewrites the order (sent as one `move`); afterwards the order can be adjusted by hand. New images go to the end, or after the image selected in the filmstrip.
+- **Search:** free text over title, description and file name; keyword chips; place; capture date range; *only images in this collection* / *only images not in it*. Runs in the browser on `/api/v1/files`, which already carries the metadata; a few thousand entries filter instantly.
+- **Preview:** *Show on TV* for one image, *Play collection*.
+- **Live updates:** the editor listens to `/api/v1/events` and applies other users' changes to its view as they arrive.
+- **Offline queue:** changes made while the connection is down are kept in the browser's storage with their change IDs and sent in order on reconnect; a change that no longer fits (e.g. its collection was deleted) is reported instead of guessed. Thanks to the change IDs a resend never applies twice.
+- **Ingress details:** all URLs relative (Ingress serves the panel under a changing path prefix, `X-Ingress-Path`); `ingress: true`, `ingress_port`, `panel_icon`, `panel_title` and `panel_admin: false` in `config.yaml`. Port 5000 stays for the integration.
+
+#### Apple Home
+
+The add-on already pushes the collection list to the integration, so `select.the_frame_collection` updates within a second. The HomeKit bridge, however, builds its accessories when it starts; new or renamed select options probably appear in Apple Home only after the bridge reloads (to be verified with the real setup). New integration option *Reload the HomeKit bridge when collections change*: reloads only the bridge entry that exposes the select (`homeassistant.reload_config_entry`), 30 seconds after the last change, so a long editing session triggers one reload.
+
+#### Robustness summary
+
+- One source of truth: the add-on's `/data` (`state.json`, `history.json`), written atomically, included in Home Assistant backups. Neither the editor nor the integration keeps its own copy.
+- Home Assistant restarts do not touch the add-on; the integration and the editor reconnect.
+- Lost connections: changes are small, applied server-side and idempotent by change ID; the editor queues them while offline.
+- Concurrent users: one change at a time, file-name anchors, revision numbers, live updates, conflicts shown; every change logged and undoable.
+- Image files and their metadata are only read, never written.
+
+#### Modules
+
+- **Add-on backend: no new dependencies.** FastAPI's `StaticFiles` serves the editor; `asyncio.Lock`, `uuid` and `json` from the standard library; the existing event stream; Pillow for thumbnails (optionally cached in `/data`). JSON files instead of SQLite: at this scale (dozens of collections, a few hundred logged changes) they are simpler, readable in a backup and consistent with the existing state file; `sqlite3` (standard library) is the fallback if the history ever needs to grow much larger.
+- **Editor: plain JavaScript modules and native web components, no build step, nothing loaded from the internet at runtime.** One library: **SortableJS** (MIT, about 45 KB) for drag and drop, because the browser's own drag and drop is unreliable by touch on iPhone and iPad; it also handles multi-select and auto-scrolling. Copied into `theframe_controller/app/static/vendor/` with a fixed version and its license file, not loaded from a CDN. Large grids use `loading="lazy"` and CSS `content-visibility`; light and dark mode via `prefers-color-scheme` (the Ingress iframe does not get Home Assistant's theme).
+- **Integration: no new dependencies** (`homeassistant.reload_config_entry` is built in).
+- **Tests:** concurrent changes, retries, history and migration with the existing pytest setup and FastAPI's test client; end-to-end editor tests with **Playwright** (`pytest-playwright`, development and CI only, never in the add-on image): open the editor against the add-on with the fake TV, create a collection, add, reorder and remove images, two browser contexts editing the same collection, offline queue replay. Own CI job with the Chromium download cached.
+
 ## 4. Repository layout (monorepo)
 
 ```
@@ -191,3 +300,10 @@ Key test scenarios: add-on starts with TV off and answers immediately; queued sy
    - Home Assistant tests in `tests_ha/` (pytest-homeassistant-custom-component, Python 3.13, own CI job): entities mirror add-on state, switches/number/services send the right `PUT`s, status events update entities, sync conflict is not an error. `custom_components/__init__.py` added so the harness imports this repo's integration. mypy still deferred.
 5. Later: playlist editor via Ingress; new entities from the art settings API. (OneDrive sync in the add-on dropped, see decision 6.)
    - Done in 1.4.0: **collections**, named slideshow presets (keyword set or playlist) stored with the slideshow state; the integration's `select.the_frame_collection` puts all of them into one Apple Home tile instead of one switch per keyword. A playlist editor would edit collections.
+   - Done in 1.5.0: **image information**: title, description, capture time, GPS position and optional place names read from the files and reported in `/api/v1/files`; capture date sent to the TV with uploads; metadata attributes on `sensor.the_frame_current_image`.
+6. **Collections editor** (design in 3.8, decision 7), in this order:
+   1. Add-on data model: collection IDs, kinds, revisions, missing files; slideshow refers to the collection by ID and position by file name; one-time migration. Tests.
+   2. Change API: changes with IDs applied one at a time, `collection` events, history, undo, restore, rename, export and import; existing endpoints routed through the change path. Tests including concurrent changes and retries.
+   3. Ingress editor: panel config, grid, search, filmstrip with SortableJS, live updates, offline queue. Playwright tests and their CI job.
+   4. Integration: HomeKit reload option. HA tests.
+   5. Docs (DOCS.md, README), HAOS check of Ingress (decision 5), release.
