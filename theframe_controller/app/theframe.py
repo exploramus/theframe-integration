@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from typing import Literal, Optional
 from contextlib import asynccontextmanager
 import contextlib
+import shutil
 from pydantic import BaseModel, Field
 import asyncio
 import os
@@ -56,6 +57,14 @@ META_FIELDS = ('title', 'description', 'taken', 'place', 'latitude', 'longitude'
 NOMINATIM_URL = 'https://nominatim.openstreetmap.org/reverse'
 NOMINATIM_DELAY = 1.1       # seconds between requests (Nominatim allows one per second)
 USER_AGENT = 'theframe-controller (https://github.com/exploramus/theframe-integration)'
+
+
+def request_user(request):
+    '''
+    the Home Assistant user behind an Ingress request, else "Home Assistant" (integration actions, direct API calls)
+    '''
+    return (request.headers.get('X-Remote-User-Display-Name') or request.headers.get('X-Remote-User-Name')
+            or 'Home Assistant')
 
 
 def api_error(status_code, code, message):
@@ -137,11 +146,15 @@ class Slideshow:
     '''
     slideshow state owned by the add-on and persisted, so it survives restarts
     stores file names; content_ids are looked up when an image is shown, so a re-upload does not break it
-    position is the index of the image shown last, -1 before the first one
-    collections are named presets of mode with keywords or files; collection is the active one, if any
+    current_file is the image shown last (None before the first one); position is its index then, kept as a hint
+    for where to continue when that file leaves the playlist
+    collections are named presets, keyed by a stable id: kind 'manual' (an ordered list of files) or 'keywords';
+    collection_id is the active one: the slideshow then plays that collection as it is now, also after edits
+    mode, keywords and files are the slideshow's own content, used when no collection is active
     '''
 
-    FIELDS = ('enabled', 'interval_minutes', 'mode', 'keywords', 'files', 'position', 'collection')
+    VERSION = 2
+    FIELDS = ('enabled', 'interval_minutes', 'mode', 'keywords', 'files', 'collection_id', 'current_file', 'position')
 
     def __init__(self, path=None):
         self.log = logging.getLogger('Main.'+__class__.__name__)
@@ -151,13 +164,18 @@ class Slideshow:
         self.mode = 'keywords'      # keywords: files matching any keyword; files: an ordered playlist
         self.keywords = []
         self.files = []
+        self.collection_id = None
+        self.current_file = None
         self.position = -1
-        self.collection = None
-        self.collections = {}       # name -> {'mode': 'keywords', 'keywords': [...]} or {'mode': 'files', 'files': [...]}
+        self.collections = {}       # id -> {'id', 'name', 'kind', 'files' or 'keywords', 'revision', 'updated', 'updated_by'}
+        self.legacy_position = None # index from a version 1 state file, resolved to a file name by the controller
         self.load()
 
     def as_dict(self):
         return {k: getattr(self, k) for k in self.FIELDS}
+
+    def by_name(self, name):
+        return next((c for c in self.collections.values() if c['name'] == name), None)
 
     def load(self):
         if not self.path or not os.path.isfile(self.path):
@@ -165,13 +183,45 @@ class Slideshow:
         try:
             with open(self.path) as f:
                 state = json.load(f)
-            data = state.get('slideshow', {})
-            for k in self.FIELDS:
-                if k in data:
-                    setattr(self, k, data[k])
-            self.collections = state.get('collections', {})
         except Exception as e:
             self.log.warning('could not read slideshow state from {}: {}'.format(self.path, e))
+            return
+        if state.get('version', 1) < 2:
+            state = self.migrate(state)
+        data = state.get('slideshow', {})
+        for k in self.FIELDS:
+            if k in data:
+                setattr(self, k, data[k])
+        self.collections = state.get('collections', {})
+        if self.collection_id not in self.collections:
+            self.collection_id = None
+
+    def migrate(self, state):
+        '''
+        version 1 (up to 1.5.0): collections keyed by name with mode files|keywords, the active one by name,
+        position as an index; the old file is kept next to the new one as state.json.v1
+        '''
+        backup = self.path + '.v1'
+        if not os.path.exists(backup):
+            with contextlib.suppress(OSError):
+                shutil.copy2(self.path, backup)
+        now = time.time()
+        collections = {}
+        for name, old in (state.get('collections') or {}).items():
+            cid = uuid.uuid4().hex
+            collection = {'id': cid, 'name': name, 'revision': 1, 'updated': now, 'updated_by': None}
+            if old.get('mode') == 'files':
+                collection.update(kind='manual', files=list(old.get('files') or []))
+            else:
+                collection.update(kind='keywords', keywords=list(old.get('keywords') or []))
+            collections[cid] = collection
+        data = dict(state.get('slideshow') or {})
+        name = data.pop('collection', None)
+        data['collection_id'] = next((c['id'] for c in collections.values() if c['name'] == name), None)
+        self.legacy_position = data.pop('position', -1)
+        self.log.info('slideshow state converted to version 2 ({} collections), old state kept in {}'.format(
+            len(collections), backup))
+        return {'version': 2, 'slideshow': data, 'collections': collections}
 
     def save(self):
         if not self.path:
@@ -179,7 +229,7 @@ class Slideshow:
         try:
             tmp = self.path + '.tmp'
             with open(tmp, 'w') as f:
-                json.dump({'slideshow': self.as_dict(), 'collections': self.collections}, f)
+                json.dump({'version': self.VERSION, 'slideshow': self.as_dict(), 'collections': self.collections}, f)
             os.replace(tmp, self.path)
         except Exception as e:
             self.log.warning('could not save slideshow state to {}: {}'.format(self.path, e))
@@ -590,6 +640,7 @@ class TheFrameController:
         if self.json_path and os.path.isfile(self.json_path):
             with contextlib.suppress(Exception):
                 self.tv_files = self.read_uploaded_files(self.json_path)
+        self.resolve_legacy_position()
         self.setup_v1_routes()
 
     def paired_ip_control(self):
@@ -1022,24 +1073,89 @@ class TheFrameController:
                 return []
         return raw if isinstance(raw, list) else []
 
+    def active_collection(self):
+        return self.slideshow.collections.get(self.slideshow.collection_id)
+
+    def content(self):
+        '''
+        what the slideshow plays: (mode, keywords, files) of the active collection as it is now, else its own
+        '''
+        collection = self.active_collection()
+        if collection is None:
+            return self.slideshow.mode, self.slideshow.keywords, self.slideshow.files
+        if collection['kind'] == 'manual':
+            return 'files', [], collection['files']
+        return 'keywords', collection['keywords'], []
+
     def playlist(self, mode=None, keywords=None, files=None):
         '''
         file names in the slideshow (or for the given mode with keywords or files), in order;
         only files uploaded to the tv
         '''
         if mode is None:
-            mode, keywords, files = self.slideshow.mode, self.slideshow.keywords, self.slideshow.files
+            mode, keywords, files = self.content()
         if mode == 'files':
             return [f for f in files or [] if f in self.tv_files]
         wanted = set(keywords or [])
         return [f for f, v in self.tv_files.items() if wanted.intersection(self.file_keywords(v))]
 
-    def collection_info(self, name):
-        collection = self.slideshow.collections[name]
-        return dict(collection, name=name, count=len(self.playlist(**collection)))
+    def collection_playlist(self, collection):
+        if collection['kind'] == 'manual':
+            return self.playlist('files', files=collection['files'])
+        return self.playlist('keywords', keywords=collection['keywords'])
+
+    def collection_info(self, collection):
+        info = {k: collection[k] for k in ('id', 'name', 'kind', 'revision', 'updated', 'updated_by')}
+        if collection['kind'] == 'manual':
+            info.update(mode='files', files=collection['files'],
+                        missing=[f for f in collection['files'] if f not in self.tv_files])
+        else:
+            info.update(mode='keywords', keywords=collection['keywords'])
+        info['count'] = len(self.collection_playlist(collection))
+        return info
 
     def collection_names(self):
-        return sorted(self.slideshow.collections, key=str.lower)
+        return sorted((c['name'] for c in self.slideshow.collections.values()), key=str.lower)
+
+    def slideshow_position(self):
+        '''
+        index of the image shown last in the playlist as it is now; -1 before the first one
+        if that image left the playlist, the one just before the place it had, so the next step shows its follower
+        '''
+        s = self.slideshow
+        if s.current_file is None:
+            return -1
+        playlist = self.playlist()
+        if s.current_file in playlist:
+            return playlist.index(s.current_file)
+        return min(s.position, len(playlist)) - 1
+
+    def slideshow_view(self):
+        '''
+        slideshow as reported by the API: settings, the content it plays, position and the active collection
+        '''
+        s = self.slideshow
+        mode, keywords, files = self.content()
+        collection = self.active_collection()
+        return {"enabled": s.enabled, "interval_minutes": s.interval_minutes, "mode": mode,
+                "keywords": keywords, "files": files, "position": self.slideshow_position(),
+                "current_file": s.current_file, "collection": collection['name'] if collection else None,
+                "collection_id": s.collection_id, "count": len(self.playlist())}
+
+    def set_position(self, position):
+        playlist = self.playlist()
+        self.slideshow.current_file = playlist[position] if 0 <= position < len(playlist) else None
+        self.slideshow.position = position if self.slideshow.current_file else -1
+
+    def resolve_legacy_position(self):
+        '''
+        after converting a version 1 state file: turn its index into the file name it pointed at
+        '''
+        if self.slideshow.legacy_position is None:
+            return
+        self.set_position(self.slideshow.legacy_position)
+        self.slideshow.legacy_position = None
+        self.slideshow.save()
 
     async def slideshow_show(self, position):
         '''
@@ -1053,31 +1169,46 @@ class TheFrameController:
         content_id = self.tv_files[playlist[position]].get('content_id')
         if not content_id or not await self.select_image(content_id):
             return None, 'tv_error'
-        self.slideshow.position = position
+        self.slideshow.current_file, self.slideshow.position = playlist[position], position
         self.slideshow.save()
         self._last_advance = time.monotonic()
         self.publish_status()
         return content_id, None
 
+    def leave_collection(self):
+        '''
+        keep playing what the active collection holds now, as the slideshow's own content
+        '''
+        mode, keywords, files = self.content()
+        s = self.slideshow
+        s.mode, s.keywords, s.files, s.collection_id = mode, list(keywords), list(files), None
+
     def update_slideshow(self, source, **changes):
         '''
         change slideshow settings; source (the endpoint) is logged, so unexpected changes can be traced
+        collection (a name) makes that collection the active one, starting at its first image;
+        changing mode, keywords or files by hand leaves the collection
         '''
         changes = {k: v for k, v in changes.items() if v is not None}
+        s = self.slideshow
+        before = self.slideshow_view()
         name = changes.pop('collection', None)
+        position = changes.pop('position', None)
         if name is not None:
-            # load the collection; the slideshow starts again at its first image
-            collection = self.slideshow.collections[name]
-            changes.update(mode=collection['mode'], keywords=collection.get('keywords', []),
-                           files=collection.get('files', []), position=changes.get('position', -1), collection=name)
-        elif {'mode', 'keywords', 'files'} & changes.keys():
-            changes['collection'] = None    # changed by hand, no longer the collection
-        changed = {k: v for k, v in changes.items() if getattr(self.slideshow, k) != v}
+            s.collection_id = s.by_name(name)['id']
+            if position is None:
+                position = -1
+        elif {'mode', 'keywords', 'files'} & changes.keys() and s.collection_id is not None:
+            self.leave_collection()
+        for k, v in changes.items():
+            setattr(s, k, v)
+        if position is not None:
+            self.set_position(position)
+        after = self.slideshow_view()
+        changed = {k: v for k, v in after.items() if before[k] != v and k != 'count'}
         if changed:
             self.log.info('slideshow changed via {}: {}'.format(source, changed))
-        for k, v in changed.items():
-            setattr(self.slideshow, k, v)
-        self.slideshow.save()
+        s.save()
         self.publish_status()
 
     async def slideshow_tick(self):
@@ -1091,7 +1222,7 @@ class TheFrameController:
             return
         if time.monotonic() - self._last_advance < s.interval_minutes * 60:
             return
-        await self.slideshow_show(s.position + 1)
+        await self.slideshow_show(self.slideshow_position() + 1)
 
     async def _slideshow_timer(self):
         while True:
@@ -1177,14 +1308,13 @@ class TheFrameController:
         '''
         status answered from cached state, never waits for the tv
         '''
-        count = len(self.playlist())
         return {
             "in_artmode": None if self.monitor.state == 'unknown' else self.monitor.in_artmode,
             "current_content_id": self.monitor.current_content_id,
             "current_file": self.current_file(),
             "sync_pending": self.sync_pending,
             "file_count": len(self.tv_files),
-            "slideshow": dict(self.slideshow.as_dict(), count=count),
+            "slideshow": self.slideshow_view(),
             "collections": self.collection_names(),
             "job": self.job.as_dict() if self.job is not None else None,
             "power_state": self.monitor.state,
@@ -1343,7 +1473,7 @@ class TheFrameController:
 
         @self.app.get("/api/v1/slideshow")
         async def v1_slideshow():
-            return dict(self.slideshow.as_dict(), count=len(self.playlist()))
+            return self.slideshow_view()
 
         @self.app.put("/api/v1/slideshow")
         async def v1_slideshow_update(req: self.SlideshowUpdate):
@@ -1353,48 +1483,57 @@ class TheFrameController:
             changes = req.model_dump(exclude_none=True)
             if "files" in changes:
                 changes["files"] = list(dict.fromkeys(changes["files"]))
-            if "collection" in changes and changes["collection"] not in self.slideshow.collections:
+            if "collection" in changes and self.slideshow.by_name(changes["collection"]) is None:
                 return api_error(404, "not_found", "no collection named {}".format(changes["collection"]))
             self.update_slideshow('PUT /api/v1/slideshow', **changes)
-            return dict(self.slideshow.as_dict(), count=len(self.playlist()))
+            return self.slideshow_view()
 
         @self.app.get("/api/v1/collections")
         async def v1_collections():
             await self.check_file_dict_availability(reload=True)
-            return {"collections": [self.collection_info(name) for name in self.collection_names()]}
+            collections = sorted(self.slideshow.collections.values(), key=lambda c: c['name'].lower())
+            return {"collections": [self.collection_info(c) for c in collections]}
 
         @self.app.put("/api/v1/collections/{name}")
-        async def v1_collection_save(name: str, req: self.CollectionRequest):
+        async def v1_collection_save(name: str, req: self.CollectionRequest, request: Request):
             '''
-            save a named slideshow preset: files (playlist), keywords, or without a body the current slideshow
+            save a named slideshow preset: files (playlist), keywords, or without a body the current slideshow;
+            saving under an existing name replaces its content and keeps its id
             '''
             name = name.strip()
             if not name or len(name) > 60:
                 return api_error(422, "invalid_request", "collection names need 1 to 60 characters")
             mode = req.mode or ('files' if req.files is not None else 'keywords' if req.keywords is not None else None)
             if mode is None:
-                mode, keywords, files = self.slideshow.mode, self.slideshow.keywords, self.slideshow.files
+                mode, keywords, files = self.content()
             else:
                 keywords, files = req.keywords or [], req.files or []
-            collection = {'mode': 'files', 'files': list(dict.fromkeys(files))} if mode == 'files' else \
-                {'mode': 'keywords', 'keywords': sorted(set(keywords))}
-            self.slideshow.collections[name] = collection
-            self.log.info('collection saved: {}: {}'.format(name, collection))
-            if self.slideshow.collection == name:
-                self.update_slideshow('PUT /api/v1/collections', collection=name)
+            collection = self.slideshow.by_name(name)
+            if collection is None:
+                collection = {'id': uuid.uuid4().hex, 'name': name, 'revision': 0}
+            for key in ('files', 'keywords'):
+                collection.pop(key, None)
+            if mode == 'files':
+                collection.update(kind='manual', files=list(dict.fromkeys(files)))
+            else:
+                collection.update(kind='keywords', keywords=sorted(set(keywords)))
+            collection.update(revision=collection['revision'] + 1, updated=time.time(), updated_by=request_user(request))
+            self.slideshow.collections[collection['id']] = collection
+            self.log.info('collection saved: {} (revision {})'.format(name, collection['revision']))
             self.slideshow.save()
             self.publish_status()
             await self.check_file_dict_availability(reload=True)
-            return self.collection_info(name)
+            return self.collection_info(collection)
 
         @self.app.delete("/api/v1/collections/{name}")
         async def v1_collection_delete(name: str):
-            if name not in self.slideshow.collections:
+            collection = self.slideshow.by_name(name)
+            if collection is None:
                 return api_error(404, "not_found", "no collection named {}".format(name))
-            del self.slideshow.collections[name]
+            if self.slideshow.collection_id == collection['id']:
+                self.leave_collection()     # the slideshow keeps showing the same images
+            del self.slideshow.collections[collection['id']]
             self.log.info('collection deleted: {}'.format(name))
-            if self.slideshow.collection == name:
-                self.slideshow.collection = None    # the slideshow keeps showing the same images
             self.slideshow.save()
             self.publish_status()
             return {"deleted": name}
@@ -1412,11 +1551,14 @@ class TheFrameController:
 
         @self.app.post("/api/v1/slideshow/next")
         async def v1_slideshow_next():
-            return await v1_slideshow_show(self.slideshow.position + 1)
+            return await v1_slideshow_show(self.slideshow_position() + 1)
 
         @self.app.post("/api/v1/slideshow/previous")
         async def v1_slideshow_previous():
-            return await v1_slideshow_show(self.slideshow.position - 1)
+            position = self.slideshow_position()
+            # after the image shown last left the playlist, position already points at the one before it
+            gone = self.slideshow.current_file is not None and self.slideshow.current_file not in self.playlist()
+            return await v1_slideshow_show(position if gone else position - 1)
 
         @self.app.post("/api/v1/slideshow/show")
         async def v1_slideshow_show_position(req: self.SlideshowShowRequest):

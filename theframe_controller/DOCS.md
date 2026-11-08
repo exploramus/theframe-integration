@@ -62,9 +62,13 @@ The add-on owns the slideshow and its timer:
 - **Keyword mode** shows every uploaded image that has any of the selected keywords.
 - **Playlist mode** shows an ordered list of file names (the integration's `theframe.play_files` action).
 
-**Collections** are named presets of either kind (a keyword set or a playlist). Loading a collection sets the slideshow to it, starting at its first image; changing keywords or files directly leaves the collection. The integration shows them as one select.
+**Collections** are named presets of either kind: a *manual* collection (an ordered list of files) or a *keyword* collection. Loading a collection makes it the active one, starting at its first image. The slideshow then plays the collection as it is: if the collection is changed while it plays, the slideshow continues after the image it showed last, in the new order; if that image was removed, it continues with the image that followed it. Changing keywords or files directly leaves the collection. Files in a manual collection that are no longer on the TV stay in the collection, are skipped and reported as `missing`. The integration shows the collections as one select.
 
-Interval, on/off, mode, keywords or playlist, the active collection, the collections and the current position are saved and survive restarts. The slideshow stores file names and looks up the TV's content ID when it shows an image, so re-uploading a changed file does not break it. The timer pauses outside Art Mode and while a sync is running.
+Each collection has a stable ID, a revision number that every save increases, and the time and user of the last change.
+
+Interval, on/off, mode, keywords or playlist, the active collection, the collections and the image shown last are saved and survive restarts. The slideshow stores file names and looks up the TV's content ID when it shows an image, so re-uploading a changed file does not break it. The timer pauses outside Art Mode and while a sync is running.
+
+Version 1.6.0 converts the stored slideshow state once on its first start; the previous file is kept as `/data/state.json.v1`.
 
 ### Image information
 
@@ -122,7 +126,7 @@ max_exceeded: silent
 | `power_state` | `off`, `standby`, `tv`, `art`, `on`, or `unknown` before the first check |
 | `current_content_id`, `current_file` | Image shown in Art Mode |
 | `job` | The current or last sync: `state` (`queued`, `running`, `done`), `total`, `done`, `attempts`, `error` |
-| `slideshow` | Slideshow settings, the active `collection` and the number of images in it (`count`) |
+| `slideshow` | Slideshow settings, the active `collection` (name and `collection_id`), the image shown last (`current_file`, `position`) and the number of images (`count`) |
 | `collections` | Names of the saved collections |
 | `tv_events` | `true` while the TV's event connection is open |
 | `event_clients` | Connected event stream clients; `1` when the integration is connected, `0` means it falls back to polling every 60 seconds |
@@ -150,8 +154,8 @@ The integration uses the versioned API under `/api/v1`. Its full description is 
 | `POST /api/v1/sync` | Start a sync job: `202` with the job; `409` while one is queued or running |
 | `POST /api/v1/show` | Show `{"file_name": "..."}` or `{"content_id": "..."}` |
 | `GET`, `PUT /api/v1/slideshow` | Slideshow settings: `enabled`, `interval_minutes`, `mode` (`keywords` or `files`), `keywords`, `files`, `position`; `{"collection": "name"}` loads a collection |
-| `GET /api/v1/collections` | Collections with mode, keywords or files and the number of images |
-| `PUT`, `DELETE /api/v1/collections/{name}` | Save a collection (`{"keywords": [...]}`, `{"files": [...]}`, or `{}` for the current slideshow); delete one |
+| `GET /api/v1/collections` | Collections with `id`, `kind` (`manual` or `keywords`), keywords or files, `missing` files, the number of images, `revision`, `updated`, `updated_by` |
+| `PUT`, `DELETE /api/v1/collections/{name}` | Save a collection (`{"keywords": [...]}`, `{"files": [...]}`, or `{}` for the current slideshow); saving under an existing name keeps its ID; delete one |
 | `POST /api/v1/slideshow/next`, `/previous`, `/show` | Step through the slideshow, or show `{"position": n}` |
 | `GET /api/v1/settings` | The TV's Art Mode settings (brightness, colour temperature, motion sensor) |
 | `POST /api/v1/power_on` | Switch the TV on (IP Control or Wake-on-LAN) |

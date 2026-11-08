@@ -132,8 +132,9 @@ def test_slideshow_settings_survive_a_restart(addon, theframe, tmp_path):
 
     restarted = theframe.TheFrameController(options_file=str(write_options(tmp_path)))
     slideshow = TestClient(restarted.app).get("/api/v1/slideshow").json()
-    assert slideshow == {"enabled": True, "interval_minutes": 7, "mode": "files",
-                         "keywords": [], "files": ["b.jpg", "a.jpg"], "position": 1, "collection": None, "count": 2}
+    assert slideshow == {"enabled": True, "interval_minutes": 7, "mode": "files", "keywords": [],
+                         "files": ["b.jpg", "a.jpg"], "position": 1, "current_file": "a.jpg",
+                         "collection": None, "collection_id": None, "count": 2}
 
 
 def test_slideshow_timer_advances_and_pauses(addon):
@@ -198,9 +199,12 @@ def test_collections_are_named_slideshow_presets(addon, theframe, tmp_path):
     client = addon.client
 
     sea = client.put("/api/v1/collections/Sea and Sky", json={"keywords": ["Sky", "Sea"]}).json()
-    assert sea == {"name": "Sea and Sky", "mode": "keywords", "keywords": ["Sea", "Sky"], "count": 2}
+    assert {k: sea[k] for k in ("name", "kind", "mode", "keywords", "count", "revision", "updated_by")} == \
+        {"name": "Sea and Sky", "kind": "keywords", "mode": "keywords", "keywords": ["Sea", "Sky"], "count": 2,
+         "revision": 1, "updated_by": "Home Assistant"}
     trip = client.put("/api/v1/collections/Ameland", json={"files": ["b.jpg", "a.jpg", "b.jpg", "missing.jpg"]}).json()
-    assert (trip["mode"], trip["files"], trip["count"]) == ("files", ["b.jpg", "a.jpg", "missing.jpg"], 2)
+    assert (trip["kind"], trip["mode"], trip["files"], trip["count"], trip["missing"]) == \
+        ("manual", "files", ["b.jpg", "a.jpg", "missing.jpg"], 2, ["missing.jpg"])
     assert client.get("/api/v1/status").json()["collections"] == ["Ameland", "Sea and Sky"]
 
     # activating a collection loads it and starts at its first image
