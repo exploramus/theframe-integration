@@ -69,7 +69,9 @@ In both modes the slideshow switch, the interval, the next/previous buttons and 
 
 A collection is a named slideshow: a set of keywords or a playlist. Pick one with `select.the_frame_collection` and the slideshow loads it, starting at its first image. Changing keywords or calling `play_files` by hand leaves the collection (the select shows nothing). Collections are kept by the add-on and survive restarts.
 
-Save the current slideshow under a name, or give keywords or files directly:
+The easiest way to make and change collections is **Frame Collections** in the sidebar, the add-on's collections editor: search images by keyword, place, title and date, pick them, drag them into order, and undo or restore earlier versions. The add-on's documentation ([DOCS.md](theframe_controller/DOCS.md#collections-editor)) describes it. In scripts and automations, use the actions below.
+
+In actions, save the current slideshow under a name, or give keywords or files directly:
 
 ```yaml
 action: theframe.save_collection
