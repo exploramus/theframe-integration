@@ -16,7 +16,13 @@ from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import TheFrameApi, TheFrameApiError
-from .const import CONF_BASE_URL, CONF_IGNORE_KEYWORDS, DEFAULT_BASE_URL, DOMAIN
+from .const import (
+    CONF_BASE_URL,
+    CONF_IGNORE_KEYWORDS,
+    CONF_RELOAD_HOMEKIT,
+    DEFAULT_BASE_URL,
+    DOMAIN,
+)
 
 
 class TheFrameConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -117,11 +123,11 @@ class TheFrameConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class TheFrameOptionsFlow(OptionsFlow):
-    """Lets the user configure which keywords to hide from the integration.
+    """Keywords to hide, and whether to reload the HomeKit bridge after collection changes.
 
-    Useful for marker-tags like `TheFrame` or `exportiert` that the user
-    sets in their photo library for housekeeping but that don't make
-    sensible category switches / media-browser folders on their own.
+    Hidden keywords are useful for marker-tags like `TheFrame` or `exportiert`
+    that the user sets in their photo library for housekeeping but that don't
+    make sensible category switches / media-browser folders on their own.
     """
 
     def __init__(self, entry: ConfigEntry) -> None:
@@ -134,7 +140,11 @@ class TheFrameOptionsFlow(OptionsFlow):
             raw = user_input.get(CONF_IGNORE_KEYWORDS, "") or ""
             ignored = [k.strip() for k in raw.split(",") if k.strip()]
             return self.async_create_entry(
-                title="", data={CONF_IGNORE_KEYWORDS: ignored}
+                title="",
+                data={
+                    CONF_IGNORE_KEYWORDS: ignored,
+                    CONF_RELOAD_HOMEKIT: bool(user_input.get(CONF_RELOAD_HOMEKIT)),
+                },
             )
 
         current = self.entry.options.get(CONF_IGNORE_KEYWORDS, [])
@@ -144,6 +154,10 @@ class TheFrameOptionsFlow(OptionsFlow):
         schema = vol.Schema(
             {
                 vol.Optional(CONF_IGNORE_KEYWORDS, default=current): str,
+                vol.Optional(
+                    CONF_RELOAD_HOMEKIT,
+                    default=bool(self.entry.options.get(CONF_RELOAD_HOMEKIT, False)),
+                ): bool,
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

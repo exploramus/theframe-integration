@@ -15,6 +15,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .api import TheFrameApi, TheFrameApiError
 from .const import (
     CONF_BASE_URL,
+    CONF_RELOAD_HOMEKIT,
     DATA_FILES,
     DOMAIN,
     PLATFORMS,
@@ -28,6 +29,7 @@ from .const import (
     SERVICE_SYNC_FILES,
 )
 from .coordinator import TheFrameCoordinator
+from .homekit import HomeKitReloader
 from .view import register_views
 
 # Eager import so HA's media_source discovery finds the module already in
@@ -85,6 +87,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_create_background_task(
         hass, coordinator.listen_for_events(), f"{DOMAIN}_events_{entry.entry_id}"
     )
+
+    if entry.options.get(CONF_RELOAD_HOMEKIT):
+        entry.async_on_unload(HomeKitReloader(hass, coordinator).start())
 
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     return True

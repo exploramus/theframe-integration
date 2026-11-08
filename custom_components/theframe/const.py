@@ -8,6 +8,8 @@ CONF_BASE_URL = "base_url"
 DEFAULT_BASE_URL = "http://homeassistant.local:5000"
 
 CONF_IGNORE_KEYWORDS = "ignore_keywords"
+# reload the HomeKit bridge after collection changes, so Apple Home shows them
+CONF_RELOAD_HOMEKIT = "reload_homekit"
 
 UPDATE_INTERVAL_SECONDS = 60
 
