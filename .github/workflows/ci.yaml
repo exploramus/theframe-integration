@@ -33,6 +33,22 @@ jobs:
       - run: pip install pytest-homeassistant-custom-component
       - run: python -m pytest tests_ha -o asyncio_mode=auto
 
+  editor-tests:
+    name: Editor – browser tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install pytest pyyaml httpx pytest-playwright==0.10.0 playwright==1.64.1 -r theframe_controller/requirements.txt
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-1.64.1
+      - run: python -m playwright install --with-deps chromium
+      - run: python -m pytest tests_e2e
+
   hassfest:
     name: Integration – hassfest
     runs-on: ubuntu-latest

@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Frame – Collections</title>
+  <link rel="stylesheet" href="editor.css">
+  <script src="vendor/Sortable-1.15.6.min.js"></script>
+  <script type="module" src="editor.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <h1>Collections</h1>
+    <span id="sync-state" class="pill" role="status" aria-live="polite">Loading…</span>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" aria-label="Collections">
+      <div class="sidebar-actions">
+        <button id="new-collection" class="primary">New collection</button>
+      </div>
+      <ul id="collection-list" class="collection-list" aria-label="Collection list"></ul>
+      <details id="deleted" class="deleted">
+        <summary>Recently deleted</summary>
+        <ul id="deleted-list"></ul>
+      </details>
+      <div class="sidebar-footer">
+        <a id="export" href="../api/v1/collections/export" download="theframe-collections.json">Export</a>
+        <label class="link">Import<input id="import" type="file" accept="application/json" hidden></label>
+      </div>
+    </aside>
+
+    <main class="main">
+      <section id="collection-header" class="collection-header" hidden>
+        <div class="title-row">
+          <h2 id="collection-name"></h2>
+          <span id="collection-meta" class="muted"></span>
+        </div>
+        <div class="actions">
+          <button id="play">Play on TV</button>
+          <button id="undo">Undo</button>
+          <button id="history">History</button>
+          <button id="rename">Rename</button>
+          <button id="duplicate">Duplicate</button>
+          <button id="delete" class="danger">Delete</button>
+        </div>
+        <div id="keyword-editor" class="keyword-editor" hidden>
+          <span class="muted">Keywords in this collection:</span>
+          <div id="keyword-editor-chips" class="chips"></div>
+        </div>
+      </section>
+
+      <section class="search" aria-label="Search">
+        <input id="search-text" type="search" placeholder="Search title, description, file name" aria-label="Search text">
+        <select id="search-place" aria-label="Place"><option value="">All places</option></select>
+        <label class="date">From <input id="search-from" type="date"></label>
+        <label class="date">To <input id="search-to" type="date"></label>
+        <select id="search-scope" aria-label="Show">
+          <option value="all">All images</option>
+          <option value="in">Only in this collection</option>
+          <option value="out">Only not in this collection</option>
+        </select>
+        <button id="add-results">Add all results</button>
+        <div id="search-keywords" class="chips" aria-label="Keywords"></div>
+        <span id="result-count" class="muted"></span>
+      </section>
+
+      <section id="grid" class="grid" aria-label="Images"></section>
+    </main>
+  </div>
+
+  <section id="filmstrip-panel" class="filmstrip-panel" hidden aria-label="Order">
+    <div class="filmstrip-tools">
+      <strong>Order</strong>
+      <span id="filmstrip-hint" class="muted">Drag ⠿ to reorder. Click images to select them.</span>
+      <button id="move-start">Move to start</button>
+      <button id="move-end">Move to end</button>
+      <button id="remove-selected">Remove selected</button>
+      <select id="sort" aria-label="Sort once">
+        <option value="">Sort once by…</option>
+        <option value="taken">Capture time</option>
+        <option value="title">Title</option>
+        <option value="file">File name</option>
+      </select>
+    </div>
+    <ol id="filmstrip" class="filmstrip"></ol>
+  </section>
+
+  <dialog id="dialog">
+    <form method="dialog" id="dialog-form">
+      <h3 id="dialog-title"></h3>
+      <div id="dialog-body"></div>
+      <menu>
+        <button value="cancel" formnovalidate>Cancel</button>
+        <button id="dialog-ok" value="ok" class="primary">OK</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <div id="toasts" class="toasts" aria-live="assertive"></div>
+</body>
+</html>

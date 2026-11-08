@@ -81,6 +81,18 @@ The TV keeps no title or description for your own images; it only stores a date 
 
 The integration shows these as attributes of `sensor.the_frame_current_image`.
 
+### Collections editor
+
+**The Frame** in Home Assistant's sidebar opens the collections editor (through Ingress, with Home Assistant's login; also in the companion app). It is open to all Home Assistant users, not only administrators; every change is logged with the user's name and can be undone or restored.
+
+- **Collections** on the left: create (manual or keywords), rename, duplicate, delete. Deleted collections stay under *Recently deleted* and can be restored. *Export* downloads all collections as JSON, *Import* adds them again.
+- **Images** in the middle, with search by text (title, description, file name), keywords, place and capture date. In a manual collection, clicking an image adds or removes it; Shift-click does the same for a range; *Add all results* adds everything the search shows. ▶ TV shows an image on the TV at once.
+- **Order** at the bottom (manual collections): drag ⠿ to reorder, or select images and use *Move to start* / *Move to end*; Alt+← / Alt+→ moves the focused image one step; *Sort once by* capture time, title or file name. New images are added after the selected image in the strip, otherwise at the end.
+- **Keyword collections** show the keywords to choose instead of the order strip.
+- **Play on TV** starts the slideshow with the collection; **Undo** reverts your own last change; **History** lists the changes and restores any earlier revision.
+
+Several people can edit at the same time: everyone sees the others' changes within a second. Edits inside a collection are shown at once and saved in the background; if the connection drops, they are kept in the browser and sent when it is back (the badge at the top shows *Offline – n changes waiting*). Creating, renaming and deleting collections need a connection.
+
 ### Waking the TV and IP Control
 
 `POST /api/v1/power_on` switches the TV on: with Samsung IP Control if it is paired, otherwise with Wake-on-LAN to `tv_mac`. The add-on runs on the host network so Wake-on-LAN broadcasts reach the TV.
