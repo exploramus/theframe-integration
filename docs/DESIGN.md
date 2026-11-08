@@ -159,7 +159,7 @@ The editor sends each action as it happens; the add-on applies one change at a t
 | `create` | name, kind, files or keywords | new collection; refused if the name is taken |
 | `add` | files, optional `after` | inserted after the anchor file, or at the end; files already in the collection are skipped |
 | `remove` | files | removed where they are |
-| `move` | files, `after` (file name or none for the start) | moved as a block after the anchor, in the order given |
+| `move` | files, `after` (file name, `null` for the start, left out for the end) | moved as a block after the anchor, in the order given; an anchor among the moved files counts as left out |
 | `set_keywords` | keywords | keyword collections only |
 | `rename` | name | refused if the name is taken |
 | `delete` | — | removed; restorable from the history |
@@ -303,7 +303,7 @@ Key test scenarios: add-on starts with TV off and answers immediately; queued sy
    - Done in 1.5.0: **image information**: title, description, capture time, GPS position and optional place names read from the files and reported in `/api/v1/files`; capture date sent to the TV with uploads; metadata attributes on `sensor.the_frame_current_image`.
 6. **Collections editor** (design in 3.8, decision 7), in this order:
    1. Add-on data model: collection IDs, kinds, revisions, missing files; slideshow refers to the collection by ID and position by file name; one-time migration. Tests. *Done on branch `step6.1/collection-model` (1.6.0, unreleased): `state.json` version 2 (version 1 kept as `state.json.v1`); `PUT /api/v1/collections/{name}` keeps the ID and counts revisions; `updated_by` from the Ingress user headers, else "Home Assistant"; the API still takes collection names, so the integration is unchanged. Tests in `tests/test_addon_collections.py`.*
-   2. Change API: changes with IDs applied one at a time, `collection` events, history, undo, restore, rename, export and import; existing endpoints routed through the change path. Tests including concurrent changes and retries.
+   2. Change API: changes with IDs applied one at a time, `collection` events, history, undo, restore, rename, export and import; existing endpoints routed through the change path. Tests including concurrent changes and retries. *Done on branch `step6.2/change-api` (part of 1.6.0): `history.json` is written before `state.json`, and at start the collections are rolled forward from the history, so a crash between the two writes loses nothing and change IDs stay consistent with the state; change IDs are rebuilt from the history after a restart; undo applies the stored inverse changes (each moved or removed file goes back after its old neighbour); restore and undo of a delete keep the collection ID and add " (restored)" on a name clash; `PUT /api/v1/collections/{name}` is logged as `save`; extra endpoint `GET /api/v1/collections/deleted`. Tests in `tests/test_addon_changes.py`.*
    3. Ingress editor: panel config, grid, search, filmstrip with SortableJS, live updates, offline queue. Playwright tests and their CI job.
    4. Integration: HomeKit reload option. HA tests.
    5. Docs (DOCS.md, README), HAOS check of Ingress (decision 5), release.

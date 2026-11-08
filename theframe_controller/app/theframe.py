@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from typing import Literal, Optional
 from contextlib import asynccontextmanager
 import contextlib
+import copy
 import shutil
 from pydantic import BaseModel, Field
 import asyncio
@@ -53,6 +54,8 @@ TV_EVENTS = ('art_mode_changed', 'image_selected', 'go_to_standby', 'wakeup')
 SYNC_RETRY_DELAY = 60       # seconds before a failed sync is retried
 SLIDESHOW_TICK = 5          # seconds between slideshow timer checks
 EVENT_KEEPALIVE = 15        # seconds between keep-alive comments on the event stream
+HISTORY_KEEP = 100          # changes kept per collection, plus everything younger than HISTORY_MAX_AGE
+HISTORY_MAX_AGE = 30 * 86400
 META_FIELDS = ('title', 'description', 'taken', 'place', 'latitude', 'longitude')
 NOMINATIM_URL = 'https://nominatim.openstreetmap.org/reverse'
 NOMINATIM_DELAY = 1.1       # seconds between requests (Nominatim allows one per second)
@@ -233,6 +236,74 @@ class Slideshow:
             os.replace(tmp, self.path)
         except Exception as e:
             self.log.warning('could not save slideshow state to {}: {}'.format(self.path, e))
+
+
+class CollectionHistory:
+    '''
+    log of collection changes, per collection id, persisted next to state.json
+    each entry: change_id, change, params, user, time, revision, after (the collection after the change, None
+    after a delete), inverse (changes that undo it), undone, undo_of
+    written before state.json, so after a crash between the two writes the state can be rolled forward from it
+    '''
+
+    def __init__(self, path=None):
+        self.log = logging.getLogger('Main.'+__class__.__name__)
+        self.path = path
+        self.entries = {}       # collection id -> list of entries, oldest first
+        self.load()
+
+    def load(self):
+        if not self.path or not os.path.isfile(self.path):
+            return
+        try:
+            with open(self.path) as f:
+                self.entries = json.load(f).get('collections', {})
+        except Exception as e:
+            self.log.warning('could not read collection history from {}: {}'.format(self.path, e))
+
+    def save(self):
+        if not self.path:
+            return
+        tmp = self.path + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump({'version': 1, 'collections': self.entries}, f)
+        os.replace(tmp, self.path)
+
+    def add(self, collection_id, entry):
+        entries = self.entries.setdefault(collection_id, [])
+        entries.append(entry)
+        cutoff = time.time() - HISTORY_MAX_AGE
+        keep_from = max(0, len(entries) - HISTORY_KEEP)
+        self.entries[collection_id] = [e for i, e in enumerate(entries) if i >= keep_from or e['time'] >= cutoff]
+
+    def last_revision(self, collection_id):
+        entries = self.entries.get(collection_id)
+        return entries[-1]['revision'] if entries else 0
+
+    def entry(self, collection_id, revision):
+        return next((e for e in self.entries.get(collection_id, []) if e['revision'] == revision), None)
+
+    def last_undoable(self, collection_id, user):
+        '''
+        the user's latest change to the collection that is not undone and not an undo itself
+        '''
+        for entry in reversed(self.entries.get(collection_id, [])):
+            if entry['user'] == user and not entry.get('undone') and entry.get('undo_of') is None:
+                return entry
+        return None
+
+    def is_deleted(self, collection_id):
+        entries = self.entries.get(collection_id)
+        return bool(entries) and entries[-1]['after'] is None
+
+    def change_ids(self):
+        return {e['change_id']: (cid, e['revision']) for cid, entries in self.entries.items() for e in entries}
+
+
+class ChangeError(Exception):
+    def __init__(self, status, code, message):
+        super().__init__(message)
+        self.status, self.code, self.message = status, code, message
 
 
 class SyncJob:
@@ -567,6 +638,17 @@ class PIL_methods:
 
    
 
+class ImportedCollection(BaseModel):
+    name: str
+    kind: Literal['manual', 'keywords']
+    files: Optional[list[str]] = None
+    keywords: Optional[list[str]] = None
+
+
+class ImportRequest(BaseModel):
+    collections: list[ImportedCollection]
+
+
 class TheFrameController:
 
     allowed_ext = ['jpg', 'jpeg', 'png']
@@ -597,6 +679,7 @@ class TheFrameController:
         self._published_status = None
         self.events = EventHub()
         self._sync_lock = asyncio.Lock()
+        self._collection_lock = asyncio.Lock()
         self.tv = None
         self.ip_control = None
         self.config_error = None
@@ -640,6 +723,9 @@ class TheFrameController:
         if self.json_path and os.path.isfile(self.json_path):
             with contextlib.suppress(Exception):
                 self.tv_files = self.read_uploaded_files(self.json_path)
+        self.history = CollectionHistory(os.path.join(os.path.dirname(os.path.abspath(options_file)), "history.json"))
+        self.recover_collections()
+        self._change_ids = self.history.change_ids()
         self.resolve_legacy_position()
         self.setup_v1_routes()
 
@@ -1117,6 +1203,172 @@ class TheFrameController:
     def collection_names(self):
         return sorted((c['name'] for c in self.slideshow.collections.values()), key=str.lower)
 
+    def recover_collections(self):
+        '''
+        roll the collections forward to the history, which is written first: after a crash between writing
+        history.json and state.json the last change is in the history only
+        '''
+        collections = self.slideshow.collections
+        recovered = []
+        for cid, entries in self.history.entries.items():
+            last = entries[-1] if entries else None
+            current = collections.get(cid)
+            if last is None or (current and current['revision'] >= last['revision']):
+                continue
+            if last['after'] is None:
+                if current is not None:
+                    if self.slideshow.collection_id == cid:
+                        self.leave_collection()
+                    del collections[cid]
+                    recovered.append(cid)
+            else:
+                collections[cid] = copy.deepcopy(last['after'])
+                recovered.append(cid)
+        if recovered:
+            self.log.warning('collections recovered from the history after an interrupted write: {}'.format(recovered))
+            self.slideshow.save()
+
+    def check_name(self, name, collection_id=None):
+        name = (name or '').strip()
+        if not name or len(name) > 60:
+            raise ChangeError(422, 'invalid_change', 'collection names need 1 to 60 characters')
+        if any(c['name'] == name and c['id'] != collection_id for c in self.slideshow.collections.values()):
+            raise ChangeError(409, 'name_taken', 'there is already a collection named {}'.format(name))
+        return name
+
+    @staticmethod
+    def place(files, items, after, has_after):
+        '''
+        insert items into files: after the anchor file; at the start if after is None; at the end without an
+        anchor or if the anchor is not in files
+        '''
+        if not has_after or (after is not None and after not in files):
+            index = len(files)
+        else:
+            index = 0 if after is None else files.index(after) + 1
+        files[index:index] = items
+
+    def apply_change(self, work, change):
+        '''
+        apply one change to a working copy of a collection (None if it does not exist);
+        returns the new working copy and the changes that undo it, in the order to apply them
+        '''
+        kind = change['change']
+        if kind == 'create':
+            if work is not None:
+                raise ChangeError(422, 'invalid_change', 'the collection exists already')
+            work = {'id': change['id'], 'name': self.check_name(change.get('name')), 'kind': change.get('kind') or 'manual',
+                    'revision': 0}
+            if work['kind'] == 'manual':
+                work['files'] = list(dict.fromkeys(change.get('files') or []))
+            else:
+                work['keywords'] = sorted(set(change.get('keywords') or []))
+            return work, [{'change': 'delete'}]
+        if kind == 'replace':
+            inverse = [{'change': 'replace', 'collection': copy.deepcopy(work)}] if work else [{'change': 'delete'}]
+            new = copy.deepcopy(change['collection'])
+            new['id'] = change['id']
+            try:
+                new['name'] = self.check_name(new['name'], new['id'])
+            except ChangeError as e:
+                if e.code != 'name_taken':
+                    raise
+                new['name'] = self.check_name('{} (restored)'.format(new['name'])[:60], new['id'])
+            new['revision'] = work['revision'] if work else 0
+            return new, inverse
+        if work is None:
+            raise ChangeError(404, 'not_found', 'no such collection')
+        if kind == 'delete':
+            return None, [{'change': 'replace', 'collection': copy.deepcopy(work)}]
+        if kind == 'rename':
+            old = work['name']
+            work['name'] = self.check_name(change.get('name'), work['id'])
+            return work, [{'change': 'rename', 'name': old}]
+        if kind == 'set_keywords':
+            if work['kind'] != 'keywords':
+                raise ChangeError(422, 'invalid_change', 'set_keywords needs a keyword collection')
+            old = work['keywords']
+            work['keywords'] = sorted(set(change.get('keywords') or []))
+            return work, [{'change': 'set_keywords', 'keywords': old}]
+        if work['kind'] != 'manual':
+            raise ChangeError(422, 'invalid_change', '{} needs a manual collection'.format(kind))
+        files = work['files']
+        items = list(dict.fromkeys(change.get('files') or []))
+        if kind == 'add':
+            added = [f for f in items if f not in files]
+            self.place(files, added, change.get('after'), 'after' in change)
+            return work, [{'change': 'remove', 'files': added}]
+        if kind == 'remove':
+            # put each file back after the file that preceded it, in the original order
+            inverse = [{'change': 'add', 'files': [f], 'after': files[i - 1] if i else None}
+                       for i, f in enumerate(files) if f in items]
+            work['files'] = [f for f in files if f not in items]
+            return work, inverse
+        if kind == 'move':
+            moving = [f for f in items if f in files]
+            inverse = [{'change': 'move', 'files': [f], 'after': files[i - 1] if i else None}
+                       for i, f in enumerate(files) if f in moving]
+            rest = [f for f in files if f not in moving]
+            after = change.get('after')
+            # without an anchor, or onto one of the moved files: to the end
+            self.place(rest, moving, after, 'after' in change and after not in moving)
+            work['files'] = rest
+            return work, inverse
+        raise ChangeError(422, 'invalid_change', 'unknown change {}'.format(kind))
+
+    async def commit_change(self, change_id, collection_id, kind, changes, user, params=None, undo_of=None):
+        '''
+        apply changes (one user action) to a collection as one revision: all or nothing, one at a time, logged
+        and announced; a change_id seen before is answered without applying it again
+        '''
+        async with self._collection_lock:
+            if change_id in self._change_ids:
+                cid, revision = self._change_ids[change_id]
+                collection = self.slideshow.collections.get(cid)
+                return {'change_id': change_id, 'duplicate': True, 'collection_id': cid, 'revision': revision,
+                        'collection': self.collection_info(collection) if collection else None}
+            current = self.slideshow.collections.get(collection_id)
+            if current is None and changes[0]['change'] not in ('create', 'replace'):
+                if self.history.is_deleted(collection_id):
+                    raise ChangeError(409, 'collection_deleted', 'the collection was deleted')
+                raise ChangeError(404, 'not_found', 'no such collection')
+            work = copy.deepcopy(current)
+            inverse = []
+            for change in changes:
+                work, undo = self.apply_change(work, dict(change, id=collection_id))
+                inverse = undo + inverse
+            revision = max(current['revision'] if current else 0, self.history.last_revision(collection_id)) + 1
+            now = time.time()
+            if work is not None:
+                work.update(revision=revision, updated=now, updated_by=user)
+            self.history.add(collection_id, {
+                'change_id': change_id, 'change': kind, 'params': params or {}, 'user': user, 'time': now,
+                'revision': revision, 'after': copy.deepcopy(work), 'inverse': inverse, 'undone': False,
+                'undo_of': undo_of})
+            if undo_of is not None:
+                undone = self.history.entry(collection_id, undo_of)
+                if undone:
+                    undone['undone'] = True
+            self.history.save()     # first: the state can be rolled forward from it
+            if work is None:
+                if self.slideshow.collection_id == collection_id:
+                    self.leave_collection()     # the slideshow keeps showing the same images
+                self.slideshow.collections.pop(collection_id, None)
+            else:
+                self.slideshow.collections[collection_id] = work
+            self.slideshow.save()
+            self._change_ids[change_id] = (collection_id, revision)
+            if len(self._change_ids) > 2000:
+                self._change_ids = self.history.change_ids()
+            info = self.collection_info(work) if work else None
+            self.log.info('collection {} {} by {} (revision {})'.format(
+                (work or current or {}).get('name', collection_id), kind, user, revision))
+        self.events.publish('collection', {'change': kind, 'change_id': change_id, 'collection_id': collection_id,
+                                           'revision': revision, 'user': user, 'collection': info})
+        self.publish_status()
+        return {'change_id': change_id, 'duplicate': False, 'collection_id': collection_id, 'revision': revision,
+                'collection': info}
+
     def slideshow_position(self):
         '''
         index of the image shown last in the playlist as it is now; -1 before the first one
@@ -1394,6 +1646,23 @@ class TheFrameController:
     class SlideshowShowRequest(BaseModel):
         position: int = Field(ge=0)
 
+    class ChangeRequest(BaseModel):
+        id: str = Field(min_length=1, max_length=64, description="change ID made by the client; a retry with the same ID is not applied twice")
+        change: Literal['create', 'add', 'remove', 'move', 'set_keywords', 'rename', 'delete']
+        collection: Optional[str] = Field(None, description="collection ID; not for create")
+        name: Optional[str] = None
+        kind: Optional[Literal['manual', 'keywords']] = None
+        files: Optional[list[str]] = None
+        keywords: Optional[list[str]] = None
+        after: Optional[str] = Field(None, description="anchor file; null for the start; left out for the end (add)")
+
+    class UndoRequest(BaseModel):
+        id: Optional[str] = Field(None, min_length=1, max_length=64)
+
+    class RestoreRequest(BaseModel):
+        revision: int = Field(ge=1)
+        id: Optional[str] = Field(None, min_length=1, max_length=64)
+
     def v1_unavailable(self, need='art'):
         '''
         /api/v1 error for commands that need the tv in art mode (need='art') or on (need='on'), or None
@@ -1494,11 +1763,110 @@ class TheFrameController:
             collections = sorted(self.slideshow.collections.values(), key=lambda c: c['name'].lower())
             return {"collections": [self.collection_info(c) for c in collections]}
 
+        async def change_response(coro):
+            try:
+                return await coro
+            except ChangeError as e:
+                return api_error(e.status, e.code, e.message)
+
+        @self.app.post("/api/v1/collections/changes")
+        async def v1_collection_change(req: self.ChangeRequest, request: Request):
+            '''
+            apply one change to a collection; changes are applied one at a time, logged and announced as
+            "collection" events; a change ID sent again is answered without applying it twice
+            '''
+            change = req.model_dump(exclude_none=True, exclude={'id', 'collection'})
+            if 'after' in req.model_fields_set:
+                change['after'] = req.after
+            if req.change == 'create':
+                collection_id = uuid.uuid4().hex
+            elif req.collection:
+                collection_id = req.collection
+            else:
+                return api_error(422, "invalid_change", "{} needs the collection ID".format(req.change))
+            return await change_response(self.commit_change(
+                req.id, collection_id, req.change, [change], request_user(request), params=change))
+
+        @self.app.get("/api/v1/collections/deleted")
+        async def v1_collections_deleted():
+            deleted = []
+            for cid, entries in self.history.entries.items():
+                if self.history.is_deleted(cid) and cid not in self.slideshow.collections:
+                    before = next((c['collection'] for c in entries[-1]['inverse'] if c['change'] == 'replace'), {})
+                    deleted.append({"id": cid, "name": before.get('name'), "deleted": entries[-1]['time'],
+                                    "deleted_by": entries[-1]['user'], "revision": entries[-1]['revision']})
+            return {"collections": sorted(deleted, key=lambda c: -c['deleted'])}
+
+        @self.app.get("/api/v1/collections/export")
+        async def v1_collections_export():
+            collections = sorted(self.slideshow.collections.values(), key=lambda c: c['name'].lower())
+            return {"version": 1, "exported": time.time(), "collections": [
+                {k: c[k] for k in ('name', 'kind', 'files', 'keywords') if k in c} for c in collections]}
+
+        @self.app.post("/api/v1/collections/import")
+        async def v1_collections_import(req: ImportRequest, request: Request):
+            '''
+            add the collections of an export; a name that is taken gets a number, nothing is overwritten
+            '''
+            imported = []
+            for c in req.collections:
+                name = c.name.strip()[:60]
+                base, n = name, 2
+                while self.slideshow.by_name(name) is not None:
+                    name = '{} ({})'.format(base[:54], n)
+                    n += 1
+                change = {'change': 'create', 'name': name, 'kind': c.kind, 'files': c.files or [],
+                          'keywords': c.keywords or []}
+                result = await change_response(self.commit_change(
+                    uuid.uuid4().hex, uuid.uuid4().hex, 'import', [change], request_user(request),
+                    params={'name': name}))
+                if isinstance(result, JSONResponse):
+                    return result
+                imported.append(name)
+            return {"imported": imported}
+
+        @self.app.get("/api/v1/collections/{collection_id}/history")
+        async def v1_collection_history(collection_id: str):
+            entries = self.history.entries.get(collection_id)
+            if not entries and collection_id not in self.slideshow.collections:
+                return api_error(404, "not_found", "no such collection")
+            keys = ('change_id', 'change', 'params', 'user', 'time', 'revision', 'undone', 'undo_of')
+            return {"collection_id": collection_id,
+                    "entries": [{k: e.get(k) for k in keys} for e in reversed(entries or [])]}
+
+        @self.app.post("/api/v1/collections/{collection_id}/undo")
+        async def v1_collection_undo(collection_id: str, request: Request, req: Optional[self.UndoRequest] = None):
+            '''
+            undo the requesting user's last change to the collection, also after others changed it since
+            '''
+            user = request_user(request)
+            entry = self.history.last_undoable(collection_id, user)
+            if entry is None:
+                return api_error(409, "nothing_to_undo", "no change of yours to undo")
+            return await change_response(self.commit_change(
+                (req and req.id) or uuid.uuid4().hex, collection_id, 'undo', entry['inverse'], user,
+                params={'revision': entry['revision'], 'change': entry['change']}, undo_of=entry['revision']))
+
+        @self.app.post("/api/v1/collections/{collection_id}/restore")
+        async def v1_collection_restore(collection_id: str, req: self.RestoreRequest, request: Request):
+            '''
+            return a collection to its state at a revision, as a new change; also restores deleted collections
+            '''
+            entry = self.history.entry(collection_id, req.revision)
+            if entry is None:
+                return api_error(404, "not_found", "revision {} is not in the history".format(req.revision))
+            if entry['after'] is None:
+                return api_error(422, "invalid_change", "revision {} is a deletion".format(req.revision))
+            return await change_response(self.commit_change(
+                req.id or uuid.uuid4().hex, collection_id, 'restore',
+                [{'change': 'replace', 'collection': entry['after']}], request_user(request),
+                params={'revision': req.revision}))
+
         @self.app.put("/api/v1/collections/{name}")
         async def v1_collection_save(name: str, req: self.CollectionRequest, request: Request):
             '''
             save a named slideshow preset: files (playlist), keywords, or without a body the current slideshow;
-            saving under an existing name replaces its content and keeps its id
+            saving under an existing name replaces its content and keeps its id; applied as a change
             '''
             name = name.strip()
             if not name or len(name) > 60:
@@ -1508,35 +1876,34 @@ class TheFrameController:
                 mode, keywords, files = self.content()
             else:
                 keywords, files = req.keywords or [], req.files or []
-            collection = self.slideshow.by_name(name)
-            if collection is None:
-                collection = {'id': uuid.uuid4().hex, 'name': name, 'revision': 0}
-            for key in ('files', 'keywords'):
-                collection.pop(key, None)
-            if mode == 'files':
-                collection.update(kind='manual', files=list(dict.fromkeys(files)))
+            content = {'kind': 'manual', 'files': list(dict.fromkeys(files))} if mode == 'files' else \
+                {'kind': 'keywords', 'keywords': sorted(set(keywords))}
+            existing = self.slideshow.by_name(name)
+            if existing is None:
+                result = await change_response(self.commit_change(
+                    uuid.uuid4().hex, uuid.uuid4().hex, 'create', [dict(content, change='create', name=name)],
+                    request_user(request), params={'name': name}))
             else:
-                collection.update(kind='keywords', keywords=sorted(set(keywords)))
-            collection.update(revision=collection['revision'] + 1, updated=time.time(), updated_by=request_user(request))
-            self.slideshow.collections[collection['id']] = collection
-            self.log.info('collection saved: {} (revision {})'.format(name, collection['revision']))
-            self.slideshow.save()
-            self.publish_status()
+                replacement = {k: v for k, v in existing.items() if k not in ('files', 'keywords')}
+                replacement.update(content)
+                result = await change_response(self.commit_change(
+                    uuid.uuid4().hex, existing['id'], 'save', [{'change': 'replace', 'collection': replacement}],
+                    request_user(request), params=content))
+            if isinstance(result, JSONResponse):
+                return result
             await self.check_file_dict_availability(reload=True)
-            return self.collection_info(collection)
+            return self.collection_info(self.slideshow.collections[result['collection_id']])
 
         @self.app.delete("/api/v1/collections/{name}")
-        async def v1_collection_delete(name: str):
+        async def v1_collection_delete(name: str, request: Request):
             collection = self.slideshow.by_name(name)
             if collection is None:
                 return api_error(404, "not_found", "no collection named {}".format(name))
-            if self.slideshow.collection_id == collection['id']:
-                self.leave_collection()     # the slideshow keeps showing the same images
-            del self.slideshow.collections[collection['id']]
-            self.log.info('collection deleted: {}'.format(name))
-            self.slideshow.save()
-            self.publish_status()
-            return {"deleted": name}
+            result = await change_response(self.commit_change(
+                uuid.uuid4().hex, collection['id'], 'delete', [{'change': 'delete'}], request_user(request)))
+            if isinstance(result, JSONResponse):
+                return result
+            return {"deleted": name, "collection_id": collection['id']}
 
         async def v1_slideshow_show(position):
             error = self.v1_unavailable()
