@@ -83,7 +83,7 @@ The integration shows these as attributes of `sensor.the_frame_current_image`.
 
 ### Collections editor
 
-**The Frame** in Home Assistant's sidebar opens the collections editor (through Ingress, with Home Assistant's login; also in the companion app). It is open to all Home Assistant users, not only administrators; every change is logged with the user's name and can be undone or restored.
+**Frame Collections** in Home Assistant's sidebar opens the collections editor (through Ingress, with Home Assistant's login; also in the companion app). It is open to all Home Assistant users, not only administrators; every change is logged with the user's name and can be undone or restored.
 
 - **Collections** on the left: create (manual or keywords), rename, duplicate, delete. Deleted collections stay under *Recently deleted* and can be restored. *Export* downloads all collections as JSON, *Import* adds them again.
 - **Images** in the middle, with search by text (title, description, file name), keywords, place and capture date. In a manual collection, clicking an image adds or removes it; Shift-click does the same for a range; *Add all results* adds everything the search shows. ▶ TV shows an image on the TV at once.

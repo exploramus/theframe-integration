@@ -17,7 +17,7 @@ The add-on works on its own through its API; the integration needs the add-on.
 - **Keyword slideshows** — one switch per keyword from your images' metadata (Photos, Lightroom); turn on the ones you want to see.
 - **Playlists** — an ordered list of images with `theframe.play_files`.
 - **Collections** — named presets (a keyword set or a playlist), picked from one select; one tile in Apple Home instead of a switch per keyword.
-- **Collections editor** — in Home Assistant's sidebar: pick images with search by keyword, place, title and date, arrange their order by drag and drop, with live updates for several users, undo and history.
+- **Collections editor** — *Frame Collections* in Home Assistant's sidebar: pick images with search by keyword, place, title and date, arrange their order by drag and drop, with live updates for several users, undo and history.
 - **Real-time status** — Art Mode, power state and the current image within about a second, pushed by the TV.
 - **Live image** of what the TV shows, for dashboards, with title, date and place from the image files.
 - **Media browser** — browse your images with thumbnails, by keyword, and show one on the TV.

@@ -16,7 +16,7 @@ ingress: true
 ingress_port: 5000
 ingress_entry: "editor/"
 panel_icon: "mdi:image-multiple"
-panel_title: "The Frame"
+panel_title: "Frame Collections"
 panel_admin: false
 options:
   token_file: "/media/TheFrame/tv-token.txt"
