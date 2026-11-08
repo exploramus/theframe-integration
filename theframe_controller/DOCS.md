@@ -10,6 +10,7 @@ Install the **The Frame Controller** integration (same repository, via HACS) to 
 2. Install **The Frame Controller**, enter at least `tv_ip` on the **Configuration** tab, and start the add-on.
 3. On the first connection the TV asks to allow a new device: press **Allow** with the remote. Until then the add-on log shows `did not accept the connection (ms.channel.timeOut)`.
 4. Add the integration (**Settings → Devices & Services → Add Integration → The Frame Controller**) with the add-on URL, usually `http://homeassistant.local:5000`.
+5. Optional: turn on **Show in sidebar** on the add-on's **Info** tab to get **Frame Collections**, the collections editor, in the sidebar. **Open Web UI** opens it as well.
 
 The add-on starts and answers at once even when the TV is off. It never switches the TV on by itself.
 
@@ -93,6 +94,8 @@ The integration shows these as attributes of `sensor.the_frame_current_image`.
 
 Several people can edit at the same time: everyone sees the others' changes within a second. Edits inside a collection are shown at once and saved in the background; if the connection drops, they are kept in the browser and sent when it is back (the badge at the top shows *Offline – n changes waiting*). Creating, renaming and deleting collections need a connection.
 
+Collections and their history are stored in `/data` (`state.json`, `history.json`) and are part of Home Assistant's backups of the add-on. The editor keeps no data of its own apart from edits waiting to be sent.
+
 ### Waking the TV and IP Control
 
 `POST /api/v1/power_on` switches the TV on: with Samsung IP Control if it is paired, otherwise with Wake-on-LAN to `tv_mac`. The add-on runs on the host network so Wake-on-LAN broadcasts reach the TV.
@@ -145,6 +148,13 @@ max_exceeded: silent
 | `art_service_available` | `false` while the TV's art service stopped answering and requests pause briefly |
 | `ip_control` | `disabled`, `unpaired` or `paired` |
 | `error` | Last problem reaching the TV |
+
+Collections editor:
+
+- **Frame Collections is not in the sidebar:** turn on **Show in sidebar** on the add-on's **Info** tab, or use **Open Web UI**.
+- **The badge shows *Offline*:** the editor cannot reach the add-on; edits inside a collection wait in this browser and are sent when the connection is back. Check that the add-on is running. Do not clear the browser's site data while changes are waiting.
+- **A change is reported as not applied:** someone else changed or deleted the collection in the meantime; the editor shows the current state, so redo the change if it is still wanted. **History** shows who changed what.
+- **New collections are missing in Apple Home:** turn on *Reload the HomeKit bridge when collections change* in the integration's options (see the integration's README).
 
 Useful lines in the add-on log:
 
