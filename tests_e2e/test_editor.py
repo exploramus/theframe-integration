@@ -263,3 +263,10 @@ def test_play_on_tv(served, page):
     expect(page.locator("#collection-list .playing")).to_have_text("Harbour1")
     slideshow = http.get("/api/v1/status").json()["slideshow"]
     assert (slideshow["collection"], slideshow["enabled"]) == ("Harbour", True)
+
+    tile(page, "Dunes").click()                      # still editable while it plays
+    wait_saved(page)
+    assert api_collections(http)["Harbour"]["files"] == ["sea_1.jpg", "sea_2.jpg"]
+    new_collection(page, "Forest")                   # and the list still switches
+    page.locator("#collection-list button", has_text="Harbour").click()
+    expect(page.locator("#collection-name")).to_have_text("Harbour")

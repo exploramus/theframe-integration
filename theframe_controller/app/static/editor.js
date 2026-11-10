@@ -195,7 +195,8 @@ async function flush() {
       }
       state.queue.shift();
       saveQueue();
-      render();
+      // a display error must not stop the remaining changes from being sent
+      try { render(); } catch (e) { console.error(e); }
     }
   } finally {
     state.sending = false;
