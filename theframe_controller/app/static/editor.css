@@ -114,7 +114,19 @@ a { color: var(--accent); text-decoration: none; }
 .title-row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .title-row h2 { margin: 0; font-size: 20px; }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-.keyword-editor { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+/* the collection's own keywords: a framed panel with solid chips, unlike the search filter below */
+.keyword-editor {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.keyword-editor > .muted { font-weight: 600; color: var(--text); }
 
 .search {
   display: flex;
@@ -126,11 +138,15 @@ a { color: var(--accent); text-decoration: none; }
 }
 .search input[type="search"] { flex: 1 1 220px; }
 .search .date { display: flex; gap: 4px; align-items: center; color: var(--muted); }
-.search .chips { flex-basis: 100%; }
+.search .filter-row { flex-basis: 100%; display: flex; gap: 8px; align-items: baseline; }
+.search .filter-row > .muted { flex: none; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { border-radius: 999px; padding: 2px 10px; font-size: 13px; }
 .chip[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+/* search filter: smaller, and a chosen filter is outlined, not filled */
+.chips.filter .chip { font-size: 12px; padding: 1px 9px; }
+.chips.filter .chip[aria-pressed="true"] { background: var(--selected); color: var(--text); border-color: var(--accent); }
 
 .grid {
   flex: 1;
@@ -247,6 +263,7 @@ dialog .history { max-height: 60vh; overflow: auto; }
   .sidebar { width: auto; max-height: 30vh; border-right: none; border-bottom: 1px solid var(--line); }
   .search { padding: 8px; }
   .search .date { flex: 1 1 140px; }
+  .search .filter-row { flex-direction: column; gap: 4px; }
   .search .date input { flex: 1; min-width: 0; }
   .grid { overflow: visible; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); padding: 8px; }
   .filmstrip-panel { position: sticky; bottom: 0; padding: 6px 8px 8px; box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.15); }

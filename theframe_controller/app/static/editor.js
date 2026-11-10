@@ -21,6 +21,8 @@ const state = {
   filmSelection: new Set(),   // selected files in the filmstrip
   lastClick: null,            // {file, action} for shift-click ranges in the grid
   search: { text: "", keywords: new Set(), place: "", from: "", to: "", scope: "all" },
+  scopeFor: undefined,        // collection the search scope was last set for (see applyScope)
+  autoScope: false,           // true while the scope is "in" because a keyword collection was opened
   tiles: new Map(),           // file name -> grid tile element, reused between renders
   eventsOpen: false,
 };
@@ -343,6 +345,7 @@ function results() {
 function render() {
   renderSyncState();
   renderCollections();
+  applyScope();
   renderHeader();
   renderSearchOptions();
   renderGrid();
@@ -493,6 +496,23 @@ function renderFilmstrip() {
 }
 
 // ---------- interactions ----------
+
+// A keyword collection opens on its own images (they follow from its keywords, there is nothing to
+// pick); a manual collection opens on all images, to pick from. A scope the user chose stays.
+function applyScope() {
+  if (state.scopeFor === state.selectedId) return;
+  const c = current();
+  if (state.selectedId && !c) return;                 // not loaded yet
+  state.scopeFor = state.selectedId;
+  if (c && c.kind === "keywords") {
+    state.search.scope = "in";
+    state.autoScope = true;
+  } else if (state.autoScope) {
+    state.search.scope = "all";
+    state.autoScope = false;
+  }
+  $("search-scope").value = state.search.scope;
+}
 
 function select(id) {
   state.selectedId = id;
@@ -738,7 +758,11 @@ function wire() {
   $("search-place").addEventListener("change", (e) => { search.place = e.target.value; renderGrid(); });
   $("search-from").addEventListener("change", (e) => { search.from = e.target.value; renderGrid(); });
   $("search-to").addEventListener("change", (e) => { search.to = e.target.value; renderGrid(); });
-  $("search-scope").addEventListener("change", (e) => { search.scope = e.target.value; renderGrid(); });
+  $("search-scope").addEventListener("change", (e) => { search.scope = e.target.value;
+    // "in" on a keyword collection is its default, so it is undone when a manual collection is opened
+    state.autoScope = search.scope === "in" && current()?.kind === "keywords";
+    renderGrid();
+  });
   window.addEventListener("online", flush);
 }
 
