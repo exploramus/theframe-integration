@@ -223,7 +223,11 @@ async function direct(path, options, success) {
   try {
     const result = await api(path, options);
     setOnline(true);
-    if (result && result.collection_id !== undefined) setBase(result.collection_id, result.collection, result.revision);
+    // only collection endpoints answer with a collection; the slideshow's answer also has collection_id,
+    // but with the collection's name in `collection`
+    if (result && result.collection_id !== undefined && typeof result.collection !== "string") {
+      setBase(result.collection_id, result.collection, result.revision);
+    }
     if (success) toast(success);
     render();
     return result;
@@ -712,7 +716,8 @@ function wire() {
   $("history").addEventListener("click", showHistory);
   $("play").addEventListener("click", () => {
     const c = current();
-    direct("slideshow", { method: "PUT", body: { collection: c.name, enabled: true } }, "Playing " + c.name + " on the TV");
+    direct("slideshow", { method: "PUT", body: { collection: c.name, enabled: true } }, "Playing " + c.name + " on the TV")
+      .then((slideshow) => { if (slideshow) { state.playing = slideshow.collection ?? null; renderCollections(); } });
   });
   $("import").addEventListener("change", (e) => { if (e.target.files[0]) importCollections(e.target.files[0]); e.target.value = ""; });
   $("add-results").addEventListener("click", () => {

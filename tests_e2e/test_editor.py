@@ -249,3 +249,17 @@ def test_tiles_keep_their_height_when_the_grid_is_too_short(served, page):
     heights = page.locator("#grid .tile").evaluate_all("els => els.map(e => e.getBoundingClientRect().height)")
     assert min(heights) > 100, heights
     assert page.locator("#grid").evaluate("g => g.scrollHeight > g.clientHeight")
+
+
+def test_play_on_tv(served, page):
+    base, http = served
+    open_editor(page, base)
+    new_collection(page, "Harbour")
+    tile(page, "Harbour at dawn").click()
+    wait_saved(page)
+    page.get_by_role("button", name="Play on TV").click()
+    expect(page.locator(".toast", has_text="Playing Harbour on the TV")).to_be_visible()
+    expect(page.locator(".toast.error")).to_have_count(0)
+    expect(page.locator("#collection-list .playing")).to_have_text("Harbour1")
+    slideshow = http.get("/api/v1/status").json()["slideshow"]
+    assert (slideshow["collection"], slideshow["enabled"]) == ("Harbour", True)
