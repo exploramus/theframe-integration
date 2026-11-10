@@ -197,6 +197,50 @@ def test_keyword_collection(served, page):
     expect(page.locator("#filmstrip-panel")).to_be_hidden()
 
 
+def test_keyword_collection_opens_on_its_own_images(served, page):
+    base, http = served
+    http.put("/api/v1/collections/Seaside", json={"keywords": ["Sea"]})
+    http.put("/api/v1/collections/Picks", json={"files": ["forest.jpg"]})
+    open_editor(page, base)
+    tiles = page.locator("#grid .tile")
+
+    page.locator("#collection-list button", has_text="Seaside").click()
+    expect(page.locator("#search-scope")).to_have_value("in")
+    expect(tiles).to_have_count(2)                                   # only the Sea images
+    expect(page.locator("#result-count")).to_have_text("2 of 4 images")
+    page.locator("#search-scope").select_option("all")              # all images one choice away
+    expect(tiles).to_have_count(4)
+    page.locator("#search-scope").select_option("in")
+
+    page.locator("#collection-list button", has_text="Picks").click()   # manual: back to all, to pick from
+    expect(page.locator("#search-scope")).to_have_value("all")
+    expect(tiles).to_have_count(4)
+
+    page.locator("#search-scope").select_option("out")              # a scope chosen by hand stays
+    page.locator("#collection-list button", has_text="Seaside").click()
+    page.locator("#collection-list button", has_text="Picks").click()
+    expect(page.locator("#search-scope")).to_have_value("all")      # ... except after a keyword collection
+    page.locator("#search-scope").select_option("out")
+    page.reload()                                                    # the opened collection is remembered
+    page.locator("#collection-list button", has_text="Seaside").click()
+    expect(page.locator("#search-scope")).to_have_value("in")
+
+
+def test_collection_keywords_and_search_filter_are_told_apart(served, page):
+    base, http = served
+    http.put("/api/v1/collections/Seaside", json={"keywords": ["Sea"]})
+    open_editor(page, base)
+    page.locator("#collection-list button", has_text="Seaside").click()
+    expect(page.locator(".filter-row")).to_contain_text("Filter by keyword:")
+    collection_chip = page.locator("#keyword-editor-chips .chip", has_text="Sea")
+    expect(collection_chip).to_have_attribute("aria-pressed", "true")
+    filter_chip = page.locator("#search-keywords .chip", has_text="Sea")
+    filter_chip.click()
+    expect(filter_chip).to_have_attribute("aria-pressed", "true")
+    background = "e => getComputedStyle(e).backgroundColor"
+    assert collection_chip.evaluate(background) != filter_chip.evaluate(background)
+
+
 def test_changes_from_another_user_appear_live(served, browser):
     base, http = served
     anna, ben = browser.new_page(), browser.new_page()
