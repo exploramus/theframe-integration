@@ -168,7 +168,7 @@ pip install pytest-homeassistant-custom-component
 python -m pytest tests_ha -o asyncio_mode=auto
 ```
 
-The collections editor's browser tests need Playwright and Chromium:
+The collections editor's browser tests need Playwright with Chromium and WebKit:
 
 ```bash
 pip install pytest-playwright
