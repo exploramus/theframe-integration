@@ -239,3 +239,13 @@ def test_delete_and_restore(served, page):
     page.locator("#deleted-list li", has_text="Temporary").get_by_role("button", name="Restore").click()
     expect(page.locator("#collection-name")).to_have_text("Temporary")
     assert api_collections(http)["Temporary"]["files"] == ["sea_2.jpg"]
+
+
+def test_tiles_keep_their_height_when_the_grid_is_too_short(served, page):
+    """many images (or a short window) must scroll the grid, not squash its rows"""
+    base, _ = served
+    page.set_viewport_size({"width": 1000, "height": 280})
+    open_editor(page, base)
+    heights = page.locator("#grid .tile").evaluate_all("els => els.map(e => e.getBoundingClientRect().height)")
+    assert min(heights) > 100, heights
+    assert page.locator("#grid").evaluate("g => g.scrollHeight > g.clientHeight")
