@@ -92,6 +92,16 @@ def filmstrip_files(page):
     return page.locator("#filmstrip li").evaluate_all("items => items.map(i => i.dataset.file)")
 
 
+def drag(page, source, target, position, first):
+    """native drag and drop, as SortableJS uses it on desktop; Playwright's simulated native drag is
+    occasionally lost in WebKit on Linux, so try up to three times until `first` leads the strip"""
+    for _ in range(3):
+        source.drag_to(target, target_position=position)
+        if page.locator("#filmstrip li").first.get_attribute("data-file") == first:
+            return
+        page.wait_for_timeout(300)
+
+
 def wait_saved(page):
     expect(page.locator("#sync-state")).to_have_text("All changes saved")
 
@@ -114,8 +124,8 @@ def test_create_a_collection_add_and_reorder(served, page):
     assert api_collections(http)["Summer"]["files"] == ["sea_2.jpg", "city.jpg", "sea_1.jpg"]
 
     # drag the last image to the front
-    page.locator("#filmstrip li[data-file='sea_1.jpg'] .handle").drag_to(
-        page.locator("#filmstrip li[data-file='sea_2.jpg']"), target_position={"x": 5, "y": 40})
+    drag(page, page.locator("#filmstrip li[data-file='sea_1.jpg'] .handle"),
+         page.locator("#filmstrip li[data-file='sea_2.jpg']"), {"x": 5, "y": 40}, first="sea_1.jpg")
     wait_saved(page)
     expect(page.locator("#filmstrip li").first).to_have_attribute("data-file", "sea_1.jpg")
     assert api_collections(http)["Summer"]["files"] == ["sea_1.jpg", "sea_2.jpg", "city.jpg"]
