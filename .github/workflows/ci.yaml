@@ -45,9 +45,10 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-1.64.1
-      - run: python -m playwright install --with-deps chromium
-      - run: python -m pytest tests_e2e
+          key: playwright-${{ runner.os }}-1.64.1-chromium-webkit
+      - run: python -m playwright install --with-deps chromium webkit
+      # WebKit is what the Home Assistant apps on iPhone, iPad and Mac use
+      - run: python -m pytest tests_e2e --browser chromium --browser webkit
 
   hassfest:
     name: Integration – hassfest

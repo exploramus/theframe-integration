@@ -92,6 +92,16 @@ def filmstrip_files(page):
     return page.locator("#filmstrip li").evaluate_all("items => items.map(i => i.dataset.file)")
 
 
+def drag(page, source, target, position, first):
+    """native drag and drop, as SortableJS uses it on desktop; Playwright's simulated native drag is
+    occasionally lost in WebKit on Linux, so try up to three times until `first` leads the strip"""
+    for _ in range(3):
+        source.drag_to(target, target_position=position)
+        if page.locator("#filmstrip li").first.get_attribute("data-file") == first:
+            return
+        page.wait_for_timeout(300)
+
+
 def wait_saved(page):
     expect(page.locator("#sync-state")).to_have_text("All changes saved")
 
@@ -114,8 +124,8 @@ def test_create_a_collection_add_and_reorder(served, page):
     assert api_collections(http)["Summer"]["files"] == ["sea_2.jpg", "city.jpg", "sea_1.jpg"]
 
     # drag the last image to the front
-    page.locator("#filmstrip li[data-file='sea_1.jpg'] .handle").drag_to(
-        page.locator("#filmstrip li[data-file='sea_2.jpg']"), target_position={"x": 5, "y": 40})
+    drag(page, page.locator("#filmstrip li[data-file='sea_1.jpg'] .handle"),
+         page.locator("#filmstrip li[data-file='sea_2.jpg']"), {"x": 5, "y": 40}, first="sea_1.jpg")
     wait_saved(page)
     expect(page.locator("#filmstrip li").first).to_have_attribute("data-file", "sea_1.jpg")
     assert api_collections(http)["Summer"]["files"] == ["sea_1.jpg", "sea_2.jpg", "city.jpg"]
@@ -239,3 +249,62 @@ def test_delete_and_restore(served, page):
     page.locator("#deleted-list li", has_text="Temporary").get_by_role("button", name="Restore").click()
     expect(page.locator("#collection-name")).to_have_text("Temporary")
     assert api_collections(http)["Temporary"]["files"] == ["sea_2.jpg"]
+
+
+def test_tiles_keep_their_height_when_the_grid_is_too_short(served, page):
+    """many images (or a short window) must scroll the grid, not squash its rows"""
+    base, _ = served
+    page.set_viewport_size({"width": 1000, "height": 280})
+    open_editor(page, base)
+    heights = page.locator("#grid .tile").evaluate_all("els => els.map(e => e.getBoundingClientRect().height)")
+    assert min(heights) > 100, heights
+    assert page.locator("#grid").evaluate("g => g.scrollHeight > g.clientHeight")
+
+
+def test_play_on_tv(served, page):
+    base, http = served
+    open_editor(page, base)
+    new_collection(page, "Harbour")
+    tile(page, "Harbour at dawn").click()
+    wait_saved(page)
+    page.get_by_role("button", name="Play on TV").click()
+    expect(page.locator(".toast", has_text="Playing Harbour on the TV")).to_be_visible()
+    expect(page.locator(".toast.error")).to_have_count(0)
+    expect(page.locator("#collection-list .playing")).to_have_text("Harbour1")
+    slideshow = http.get("/api/v1/status").json()["slideshow"]
+    assert (slideshow["collection"], slideshow["enabled"]) == ("Harbour", True)
+
+    tile(page, "Dunes").click()                      # still editable while it plays
+    wait_saved(page)
+    assert api_collections(http)["Harbour"]["files"] == ["sea_1.jpg", "sea_2.jpg"]
+    new_collection(page, "Forest")                   # and the list still switches
+    page.locator("#collection-list button", has_text="Harbour").click()
+    expect(page.locator("#collection-name")).to_have_text("Harbour")
+
+
+def test_new_collection_with_the_name_of_a_deleted_one(served, page):
+    """delete a playing keyword collection, create a manual one with its name, restore the old one"""
+    base, http = served
+    open_editor(page, base)
+    new_collection(page, "Shades", kind="keywords")
+    page.locator("#keyword-editor-chips button", has_text="Sea").click()
+    wait_saved(page)
+    page.get_by_role("button", name="Play on TV").click()            # 1.6.0 broke the list from here on
+    expect(page.locator(".toast", has_text="Playing Shades")).to_be_visible()
+    page.get_by_role("button", name="Delete").click()
+    page.locator("#dialog-ok").click()
+    expect(page.locator("#collection-header")).to_be_hidden()
+
+    new_collection(page, "Shades")                                   # manual, same name
+    expect(page.locator("#collection-list button", has_text="Shades")).to_have_count(1)
+    tile(page, "Dunes").click()
+    wait_saved(page)
+
+    page.locator("#deleted summary").click()
+    page.locator("#deleted-list li", has_text="Shades").get_by_role("button", name="Restore").click()
+    expect(page.locator("#collection-name")).to_have_text("Shades (restored)")
+    expect(page.locator("#collection-list button")).to_have_count(2)
+    collections = api_collections(http)
+    assert collections["Shades"]["files"] == ["sea_2.jpg"]
+    assert (collections["Shades (restored)"]["kind"], collections["Shades (restored)"]["keywords"]) == ("keywords", ["Sea"])
+    expect(page.locator(".toast.error")).to_have_count(0)

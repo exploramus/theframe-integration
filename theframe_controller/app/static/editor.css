@@ -140,6 +140,8 @@ a { color: var(--accent); text-decoration: none; }
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 10px;
   align-content: start;
+  /* tiles clip their content (overflow: hidden), which lets auto rows shrink to nothing when there are many */
+  grid-auto-rows: max-content;
 }
 .tile {
   position: relative;
@@ -154,6 +156,7 @@ a { color: var(--accent); text-decoration: none; }
   content-visibility: auto;
   contain-intrinsic-size: 160px 150px;
 }
+.tile img, .tile .caption { flex: none; }
 .tile img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: var(--line); display: block; }
 .tile .caption { padding: 4px 6px 6px; font-size: 12px; }
 .tile .caption .name { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

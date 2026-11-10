@@ -168,12 +168,12 @@ pip install pytest-homeassistant-custom-component
 python -m pytest tests_ha -o asyncio_mode=auto
 ```
 
-The collections editor's browser tests need Playwright and Chromium:
+The collections editor's browser tests need Playwright with Chromium and WebKit:
 
 ```bash
 pip install pytest-playwright
-python -m playwright install chromium
-python -m pytest tests_e2e
+python -m playwright install chromium webkit
+python -m pytest tests_e2e --browser chromium --browser webkit
 ```
 
 **CI** runs lint, all three test suites, hassfest, HACS validation, the add-on linter and image builds for aarch64 and amd64 on every pull request. `main` is protected: changes go through pull requests with passing checks.
