@@ -270,3 +270,31 @@ def test_play_on_tv(served, page):
     new_collection(page, "Forest")                   # and the list still switches
     page.locator("#collection-list button", has_text="Harbour").click()
     expect(page.locator("#collection-name")).to_have_text("Harbour")
+
+
+def test_new_collection_with_the_name_of_a_deleted_one(served, page):
+    """delete a playing keyword collection, create a manual one with its name, restore the old one"""
+    base, http = served
+    open_editor(page, base)
+    new_collection(page, "Shades", kind="keywords")
+    page.locator("#keyword-editor-chips button", has_text="Sea").click()
+    wait_saved(page)
+    page.get_by_role("button", name="Play on TV").click()            # 1.6.0 broke the list from here on
+    expect(page.locator(".toast", has_text="Playing Shades")).to_be_visible()
+    page.get_by_role("button", name="Delete").click()
+    page.locator("#dialog-ok").click()
+    expect(page.locator("#collection-header")).to_be_hidden()
+
+    new_collection(page, "Shades")                                   # manual, same name
+    expect(page.locator("#collection-list button", has_text="Shades")).to_have_count(1)
+    tile(page, "Dunes").click()
+    wait_saved(page)
+
+    page.locator("#deleted summary").click()
+    page.locator("#deleted-list li", has_text="Shades").get_by_role("button", name="Restore").click()
+    expect(page.locator("#collection-name")).to_have_text("Shades (restored)")
+    expect(page.locator("#collection-list button")).to_have_count(2)
+    collections = api_collections(http)
+    assert collections["Shades"]["files"] == ["sea_2.jpg"]
+    assert (collections["Shades (restored)"]["kind"], collections["Shades (restored)"]["keywords"]) == ("keywords", ["Sea"])
+    expect(page.locator(".toast.error")).to_have_count(0)
