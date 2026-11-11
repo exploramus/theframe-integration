@@ -147,6 +147,16 @@ def tv_date(meta):
     return taken[:19].replace('-', ':').replace('T', ' ') if taken else None
 
 
+class EditorFiles(StaticFiles):
+    """The collections editor's files. `no-cache` makes browsers ask again on every load (answered with
+    304 while unchanged); without it Safari kept an old editor after add-on updates."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 class Slideshow:
     '''
     slideshow state owned by the add-on and persisted, so it survives restarts
@@ -673,7 +683,7 @@ class TheFrameController:
 
         self.app = FastAPI(lifespan=lifespan)
         # collections editor, shown in Home Assistant's sidebar through Ingress (ingress_entry: editor/)
-        self.app.mount("/editor", StaticFiles(directory=STATIC_DIR, html=True), name="editor")
+        self.app.mount("/editor", EditorFiles(directory=STATIC_DIR, html=True), name="editor")
         self.app.add_api_route("/", lambda: RedirectResponse("editor/"), include_in_schema=False)
         logging.basicConfig(level=logging.INFO)
         self.log = logging.getLogger('Main.'+__class__.__name__)

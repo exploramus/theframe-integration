@@ -112,6 +112,31 @@ def test_root_redirects_to_the_editor(served):
     assert (response.status_code, response.headers["location"]) == (307, "editor/")
 
 
+def test_editor_files_are_checked_for_updates_on_every_load(served):
+    _, http = served
+    for path in ("/editor/", "/editor/editor.js", "/editor/editor.css"):
+        response = http.get(path)
+        assert response.headers["cache-control"] == "no-cache", path
+        assert http.get(path, headers={"If-None-Match": response.headers["etag"]}).status_code == 304
+
+
+def test_long_press_on_the_order_strip_does_not_open_the_image_menu(served, page):
+    """iOS opens the share menu on a long press on an image; the strip must leave long presses to dragging"""
+    base, _ = served
+    open_editor(page, base)
+    new_collection(page, "Touch")
+    tile(page, "Dunes").click()
+    wait_saved(page)
+    item = page.locator("#filmstrip li").first
+    assert item.locator("img").get_attribute("draggable") == "false"
+    assert item.locator("img").evaluate("e => getComputedStyle(e).pointerEvents") == "none"
+    assert item.evaluate("e => getComputedStyle(e).userSelect") == "none"
+    callout = item.evaluate("e => getComputedStyle(e).webkitTouchCallout")
+    assert callout in ("none", None), callout        # only WebKit knows the property
+    box = item.locator(".handle").bounding_box()
+    assert box["width"] >= 28 and box["height"] >= 28
+
+
 def test_create_a_collection_add_and_reorder(served, page):
     base, http = served
     open_editor(page, base)
