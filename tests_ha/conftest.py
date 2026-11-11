@@ -51,6 +51,7 @@ def addon(aioclient_mock):
     aioclient_mock.get(f"{BASE}/api/v1/keywords", json={"keywords": ["Forest", "Sea"]})
     aioclient_mock.get(f"{BASE}/api/v1/files", json={"files": FILES})
     aioclient_mock.get(f"{BASE}/api/v1/events", text="")
+    aioclient_mock.put(f"{BASE}/api/v1/editor/settings", json={"hidden_keywords": []})
     return aioclient_mock
 
 

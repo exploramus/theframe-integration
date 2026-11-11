@@ -172,8 +172,37 @@ async def test_collection_select_is_unavailable_without_collections(hass, aiocli
     aioclient_mock.get(f"{BASE}/api/v1/keywords", json={"keywords": []})
     aioclient_mock.get(f"{BASE}/api/v1/files", json={"files": []})
     aioclient_mock.get(f"{BASE}/api/v1/events", text="")
+    aioclient_mock.put(f"{BASE}/api/v1/editor/settings", json={"hidden_keywords": []})
     entry = MockConfigEntry(domain="theframe", data={"base_url": BASE})
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     assert hass.states.get("select.the_frame_collection").state == "unavailable"
+
+
+async def test_ignored_keywords_are_sent_to_the_editor(hass, addon):
+    """the collections editor runs in the add-on and hides the keywords ignored here, too"""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    entry = MockConfigEntry(domain="theframe", data={"base_url": BASE},
+                            options={"ignore_keywords": ["TheFrame", "exportiert"]})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert calls(addon, "PUT", "/api/v1/editor/settings") == [{"hidden_keywords": ["TheFrame", "exportiert"]}]
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_an_addon_without_settings_still_sets_up(hass, aioclient_mock):
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    aioclient_mock.get(f"{BASE}/api/v1/status", json=STATUS)
+    aioclient_mock.get(f"{BASE}/api/v1/keywords", json={"keywords": []})
+    aioclient_mock.get(f"{BASE}/api/v1/files", json={"files": []})
+    aioclient_mock.get(f"{BASE}/api/v1/events", text="")
+    aioclient_mock.put(f"{BASE}/api/v1/editor/settings", status=404, json={"detail": "Not Found"})
+    entry = MockConfigEntry(domain="theframe", data={"base_url": BASE})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.the_frame_current_image") is not None

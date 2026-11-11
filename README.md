@@ -121,7 +121,7 @@ script:
 
 ## Configuration
 
-- **Hide keywords:** **Settings → Devices & Services → The Frame → Configure**, enter keywords to hide (e.g. `TheFrame, exported`). Their switches and media browser folders disappear; the add-on's data is unchanged.
+- **Hide keywords:** **Settings → Devices & Services → The Frame → Configure**, enter keywords to hide (e.g. `TheFrame, exported`). Their switches and media browser folders disappear, and the collections editor no longer offers them; the add-on's data is unchanged.
 - **Change the add-on URL:** **⋮ → Reconfigure** on the integration; entities and history are kept.
 - **Apple Home:** expose `select.the_frame_collection`, `switch.the_frame_slideshow`, `select.the_frame_slideshow_interval` and the next/previous buttons in the HomeKit bridge. Apple Home shows each select as one tile. Leave the keyword switches out and put the combinations you want into collections instead.
 - **New collections in Apple Home:** new, renamed and deleted collections normally show up in the Apple Home tile on their own (checked with HAOS and the HomeKit bridge, November 2026). If they don't in your setup, turn on **Configure → Reload the HomeKit bridge when collections change**: every bridge that shows `select.the_frame_collection` then reloads 30 seconds after the last change (one reload per editing session); Apple Home is unresponsive for a few seconds during the reload.

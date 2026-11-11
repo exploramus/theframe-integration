@@ -28,7 +28,7 @@
     "step": {
       "init": {
         "title": "The Frame options",
-        "description": "Hidden keywords: a comma-separated list of keywords to hide from this integration. Useful for marker tags like \"TheFrame\" or \"exportiert\" that you maintain in your photo library for housekeeping but that don't need their own switch / media-browser folder. Hidden keywords also disappear from per-file metadata.\n\nHomeKit: Apple Home shows new, renamed or deleted collections only after the HomeKit bridge reloads. With this option on, every HomeKit bridge that shows the collection select reloads 30 seconds after the last change.",
+        "description": "Hidden keywords: a comma-separated list of keywords to hide from this integration. Useful for marker tags like \"TheFrame\" or \"exportiert\" that you maintain in your photo library for housekeeping but that don't need their own switch / media-browser folder. Hidden keywords also disappear from per-file metadata and from the collections editor.\n\nHomeKit: new, renamed or deleted collections normally reach Apple Home on their own. If they don't, turn this on: every HomeKit bridge that shows the collection select then reloads 30 seconds after the last change.",
         "data": {
           "ignore_keywords": "Ignored keywords",
           "reload_homekit": "Reload the HomeKit bridge when collections change"

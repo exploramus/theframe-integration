@@ -184,6 +184,7 @@ class Slideshow:
         self.position = -1
         self.collections = {}       # id -> {'id', 'name', 'kind', 'files' or 'keywords', 'revision', 'updated', 'updated_by'}
         self.legacy_position = None # index from a version 1 state file, resolved to a file name by the controller
+        self.hidden_keywords = []   # keywords the editor does not offer, set by the integration (its ignored keywords)
         self.load()
 
     def as_dict(self):
@@ -208,6 +209,7 @@ class Slideshow:
             if k in data:
                 setattr(self, k, data[k])
         self.collections = state.get('collections', {})
+        self.hidden_keywords = list((state.get('settings') or {}).get('hidden_keywords') or [])
         if self.collection_id not in self.collections:
             self.collection_id = None
 
@@ -244,7 +246,8 @@ class Slideshow:
         try:
             tmp = self.path + '.tmp'
             with open(tmp, 'w') as f:
-                json.dump({'version': self.VERSION, 'slideshow': self.as_dict(), 'collections': self.collections}, f)
+                json.dump({'version': self.VERSION, 'slideshow': self.as_dict(), 'collections': self.collections,
+                           'settings': {'hidden_keywords': self.hidden_keywords}}, f)
             os.replace(tmp, self.path)
         except Exception as e:
             self.log.warning('could not save slideshow state to {}: {}'.format(self.path, e))
@@ -294,6 +297,20 @@ class CollectionHistory:
 
     def entry(self, collection_id, revision):
         return next((e for e in self.entries.get(collection_id, []) if e['revision'] == revision), None)
+
+    def snapshot(self, collection_id, revision):
+        '''
+        the collection as it was at a revision, or None if the history cannot tell; when the revision has no
+        entry (collections converted from version 1 start at revision 1 without one), the change that followed
+        it tells, if it is undone by replacing the whole collection (delete, save, restore, import)
+        '''
+        entry = self.entry(collection_id, revision)
+        if entry is not None:
+            return entry['after']
+        following = self.entry(collection_id, revision + 1)
+        if following and len(following['inverse']) == 1 and following['inverse'][0]['change'] == 'replace':
+            return following['inverse'][0]['collection']
+        return None
 
     def last_undoable(self, collection_id, user):
         '''
@@ -1653,6 +1670,9 @@ class TheFrameController:
         position: Optional[int] = Field(None, ge=-1)
         collection: Optional[str] = None
 
+    class SettingsRequest(BaseModel):
+        hidden_keywords: Optional[list[str]] = None
+
     class CollectionRequest(BaseModel):
         mode: Optional[Literal['keywords', 'files']] = None
         keywords: Optional[list[str]] = None
@@ -1704,6 +1724,26 @@ class TheFrameController:
             if self.config_error:
                 return api_error(503, "not_configured", self.config_error)
             return self.status()
+
+        @self.app.get("/api/v1/editor/settings")
+        async def v1_editor_settings():
+            '''
+            settings for the collections editor: hidden_keywords are not offered in its keyword lists
+            '''
+            return {"hidden_keywords": self.slideshow.hidden_keywords}
+
+        @self.app.put("/api/v1/editor/settings")
+        async def v1_editor_settings_update(req: self.SettingsRequest):
+            '''
+            change editor settings; the integration sends its ignored keywords as hidden_keywords
+            '''
+            if req.hidden_keywords is not None:
+                hidden = sorted({k.strip() for k in req.hidden_keywords if k.strip()})
+                if hidden != self.slideshow.hidden_keywords:
+                    self.slideshow.hidden_keywords = hidden
+                    self.slideshow.save()
+                    self.events.publish('editor_settings', {"hidden_keywords": hidden})
+            return {"hidden_keywords": self.slideshow.hidden_keywords}
 
         @self.app.get("/api/v1/events")
         async def v1_events():
@@ -1868,13 +1908,14 @@ class TheFrameController:
             return a collection to its state at a revision, as a new change; also restores deleted collections
             '''
             entry = self.history.entry(collection_id, req.revision)
-            if entry is None:
-                return api_error(404, "not_found", "revision {} is not in the history".format(req.revision))
-            if entry['after'] is None:
+            if entry is not None and entry['after'] is None:
                 return api_error(422, "invalid_change", "revision {} is a deletion".format(req.revision))
+            collection = self.history.snapshot(collection_id, req.revision)
+            if collection is None:
+                return api_error(404, "not_found", "revision {} is not in the history".format(req.revision))
             return await change_response(self.commit_change(
                 req.id or uuid.uuid4().hex, collection_id, 'restore',
-                [{'change': 'replace', 'collection': entry['after']}], request_user(request),
+                [{'change': 'replace', 'collection': copy.deepcopy(collection)}], request_user(request),
                 params={'revision': req.revision}))
 
         @self.app.put("/api/v1/collections/{name}")

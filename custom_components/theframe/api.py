@@ -35,6 +35,7 @@ ENDPOINTS: dict[str, tuple[str, str]] = {
     "collections": ("GET", "/api/v1/collections"),
     "collection_save": ("PUT", "/api/v1/collections/{name}"),
     "collection_delete": ("DELETE", "/api/v1/collections/{name}"),
+    "editor_settings": ("PUT", "/api/v1/editor/settings"),
 }
 
 
@@ -128,6 +129,10 @@ class TheFrameApi:
 
     async def delete_collection(self, name: str) -> dict:
         return await self._request("collection_delete", name=name)
+
+    async def editor_settings(self, **settings: Any) -> dict:
+        """Change the collections editor's settings in the add-on, e.g. hidden_keywords=[...]."""
+        return await self._request("editor_settings", settings)
 
     async def events(self) -> AsyncIterator[tuple[str, Any]]:
         """Yield (event, data) from the add-on's server-sent events until the stream ends."""

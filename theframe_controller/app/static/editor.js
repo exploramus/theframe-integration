@@ -22,7 +22,9 @@ const state = {
   lastClick: null,            // {file, action} for shift-click ranges in the grid
   search: { text: "", keywords: new Set(), place: "", from: "", to: "", scope: "all" },
   scopeFor: undefined,        // collection the search scope was last set for (see applyScope)
-  autoScope: false,           // true while the scope is "in" because a keyword collection was opened
+  autoScope: false,
+  deleting: new Set(),
+  hidden: new Set(),          // keywords not offered (the integration's ignored keywords)        // collections this editor is deleting, so their delete event is not reported           // true while the scope is "in" because a keyword collection was opened
   tiles: new Map(),           // file name -> grid tile element, reused between renders
   eventsOpen: false,
 };
@@ -257,6 +259,12 @@ async function reloadFiles() {
   state.byName = new Map(state.files.map((f) => [f.file_name, f]));
 }
 
+async function reloadSettings() {
+  try {
+    state.hidden = new Set((await api("editor/settings")).hidden_keywords || []);
+  } catch { /* an add-on without settings: hide nothing */ }
+}
+
 async function reloadCollections() {
   const data = await api("collections");
   state.base = new Map(data.collections.map((c) => [c.id, c]));
@@ -272,7 +280,7 @@ async function reloadDeleted() {
 
 async function reload() {
   try {
-    await Promise.all([reloadFiles(), reloadCollections()]);
+    await Promise.all([reloadFiles(), reloadCollections(), reloadSettings()]);
     setOnline(true);
     reloadDeleted();
     render();
@@ -290,13 +298,19 @@ function listen() {
   events.addEventListener("collection", (e) => {
     const data = JSON.parse(e.data);
     setBase(data.collection_id, data.collection, data.revision);
-    if (!data.collection && data.collection_id === state.selectedId && !state.queue.length) {
+    const own = state.deleting.delete(data.collection_id);
+    if (!data.collection && !own && data.collection_id === state.selectedId && !state.queue.length) {
       toast("This collection was deleted" + (data.user ? " by " + data.user : "") + ".");
     }
     if (data.change === "delete" || data.change === "undo" || data.change === "restore") reloadDeleted();
     render();
   });
   events.addEventListener("files", () => reloadFiles().then(render).catch(() => {}));
+  events.addEventListener("editor_settings", (e) => {
+    state.hidden = new Set(JSON.parse(e.data).hidden_keywords || []);
+    for (const k of [...state.search.keywords]) if (state.hidden.has(k)) state.search.keywords.delete(k);
+    render();
+  });
   events.addEventListener("status", (e) => {
     const playing = JSON.parse(e.data).slideshow?.collection ?? null;
     if (playing !== state.playing) { state.playing = playing; renderCollections(); }
@@ -401,7 +415,9 @@ function renderHeader() {
   $("keyword-editor").hidden = c.kind !== "keywords";
   if (c.kind === "keywords") {
     const chosen = new Set(c.keywords);
-    $("keyword-editor-chips").replaceChildren(...allKeywords().map((k) => h("button", {
+    // a hidden keyword the collection still uses stays visible, so it can be removed
+    const offered = [...new Set([...allKeywords(), ...c.keywords])].sort((a, b) => a.localeCompare(b));
+    $("keyword-editor-chips").replaceChildren(...offered.map((k) => h("button", {
       class: "chip", "aria-pressed": chosen.has(k) ? "true" : "false",
       onclick: () => {
         const next = new Set(chosen);
@@ -413,7 +429,8 @@ function renderHeader() {
 }
 
 function allKeywords() {
-  return [...new Set(state.files.flatMap((f) => f.keywords || []))].sort((a, b) => a.localeCompare(b));
+  return [...new Set(state.files.flatMap((f) => f.keywords || []))].filter((k) => !state.hidden.has(k))
+    .sort((a, b) => a.localeCompare(b));
 }
 
 function renderSearchOptions() {
@@ -674,7 +691,9 @@ async function deleteCollection() {
   const ok = await ask("Delete " + c.name + "?", [{ type: "html",
     element: h("p", {}, "You can restore it from Recently deleted for 30 days.") }], "Delete");
   if (!ok) return;
+  state.deleting.add(c.id);
   const result = await direct("collections/changes", changeRequest({ change: "delete", collection: c.id }), "Deleted " + c.name);
+  if (!result) state.deleting.delete(c.id);
   if (result) { select(null); reloadDeleted(); }
 }
 
