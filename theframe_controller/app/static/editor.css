@@ -215,6 +215,10 @@ a { color: var(--accent); text-decoration: none; }
 }
 .filmstrip li {
   flex: none;
+  /* iOS: a long press for dragging must not open the image's share menu or select text */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
   width: 120px;
   position: relative;
   border: 2px solid transparent;
@@ -224,12 +228,17 @@ a { color: var(--accent); text-decoration: none; }
 }
 .filmstrip li.selected { border-color: var(--accent); background: var(--selected); }
 .filmstrip li:focus-visible { border-color: var(--accent); }
-.filmstrip li img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block; border-radius: 6px 6px 0 0; }
+.filmstrip li img { -webkit-user-drag: none; pointer-events: none; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block; border-radius: 6px 6px 0 0; }
 .filmstrip li .label { font-size: 11px; padding: 2px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .filmstrip li .handle {
   position: absolute;
   top: 3px;
   left: 3px;
+  /* big enough to hit with a finger */
+  min-width: 28px;
+  min-height: 28px;
+  display: grid;
+  place-items: center;
   padding: 0 4px;
   cursor: grab;
   touch-action: none;

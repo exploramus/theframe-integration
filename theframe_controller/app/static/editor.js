@@ -484,7 +484,7 @@ function renderFilmstrip() {
     onkeydown: (e) => filmstripKey(e, file),
   },
     h("span", { class: "handle", "aria-hidden": "true", title: "Drag to reorder" }, "⠿"),
-    h("img", { src: thumb(file, 160), loading: "lazy", alt: "" }),
+    h("img", { src: thumb(file, 160), loading: "lazy", alt: "", draggable: "false" }),
     h("div", { class: "label" }, missing.has(file) ? "missing: " + file : label(file)),
     h("button", { class: "remove", title: "Remove from collection", "aria-label": "Remove " + file,
       onclick: (e) => { e.stopPropagation(); queueChange({ change: "remove", files: [file] }); } }, "×"))));

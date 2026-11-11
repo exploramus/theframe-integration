@@ -154,7 +154,7 @@ Collections editor:
 - **Frame Collections is not in the sidebar:** turn on **Show in sidebar** on the add-on's **Info** tab, or use **Open Web UI**.
 - **The badge shows *Offline*:** the editor cannot reach the add-on; edits inside a collection wait in this browser and are sent when the connection is back. Check that the add-on is running. Do not clear the browser's site data while changes are waiting.
 - **A change is reported as not applied:** someone else changed or deleted the collection in the meantime; the editor shows the current state, so redo the change if it is still wanted. **History** shows who changed what.
-- **New collections are missing in Apple Home:** turn on *Reload the HomeKit bridge when collections change* in the integration's options (see the integration's README).
+- **New collections are missing in Apple Home** (normally they appear on their own): turn on *Reload the HomeKit bridge when collections change* in the integration's options (see the integration's README).
 
 Useful lines in the add-on log:
 
