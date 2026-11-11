@@ -96,6 +96,19 @@ class TheFrameCoordinator(DataUpdateCoordinator[dict]):
                 {**self.data, DATA_STATUS: {**self.status, "slideshow": slideshow}}
             )
 
+    async def send_editor_settings(self) -> None:
+        """Tell the add-on which keywords its collections editor hides: the ones ignored here.
+
+        Sent at setup and on every (re)connect of the event stream, so an add-on that was restarted,
+        updated or not reachable at setup gets them too. Changing the options reloads the entry.
+        """
+        ignored = list(self.entry.options.get(CONF_IGNORE_KEYWORDS, []) or [])
+        try:
+            await self.api.editor_settings(hidden_keywords=ignored)
+        except TheFrameApiError as err:
+            # an add-on before 1.6.4 has no editor settings; everything else keeps working
+            _LOGGER.debug("Could not send the ignored keywords to the add-on: %s", err)
+
     async def listen_for_events(self) -> None:
         """Keep the add-on's event stream open; reconnect with back-off when it drops."""
         delay = EVENTS_RETRY_MIN
@@ -106,6 +119,7 @@ class TheFrameCoordinator(DataUpdateCoordinator[dict]):
                     if not connected:
                         _LOGGER.debug("Event stream connected")
                         connected = True
+                        await self.send_editor_settings()
                     delay = EVENTS_RETRY_MIN
                     if event == "status" and self.data is not None:
                         self.async_set_updated_data({**self.data, DATA_STATUS: data})
