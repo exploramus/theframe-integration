@@ -416,3 +416,28 @@ def test_hidden_keywords_are_not_offered(served, page):
     expect(page.locator("#keyword-editor-chips .chip", has_text="Sky")).to_have_count(0)
     page.reload()
     expect(page.locator("#search-keywords .chip", has_text="Sky")).to_have_count(0)
+
+
+def test_enter_in_a_dialog_confirms_it(served, page):
+    """Enter used to answer with the dialog's first button, Cancel, and nothing was created"""
+    base, http = served
+    open_editor(page, base)
+    page.get_by_role("button", name="New collection").click()
+    page.locator("#dialog input[name=name]").fill("nature")
+    page.locator("#dialog input[name=name]").press("Enter")
+    expect(page.locator("#collection-name")).to_have_text("nature")
+    assert "nature" in api_collections(http)
+
+    page.get_by_role("button", name="New collection").click()     # Escape after an OK must not create
+    page.locator("#dialog input[name=name]").fill("natural")
+    page.keyboard.press("Escape")
+    expect(page.locator("#dialog")).not_to_have_attribute("open", "")
+    page.get_by_role("button", name="New collection").click()     # neither must Cancel
+    page.locator("#dialog input[name=name]").fill("natural")
+    page.get_by_role("button", name="Cancel").click()
+    page.get_by_role("button", name="New collection").click()     # an empty name is not sent
+    page.locator("#dialog input[name=name]").press("Enter")
+    expect(page.locator("#dialog")).to_have_attribute("open", "")
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(300)
+    assert list(api_collections(http)) == ["nature"]

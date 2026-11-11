@@ -644,6 +644,8 @@ async function ask(title, fields, okText = "OK") {
     inputs[f.name] = input;
     return h("label", {}, f.label, input);
   }));
+  dialog.returnValue = "";                            // Escape keeps the last value, so start empty
+  $("dialog-cancel").onclick = () => dialog.close("cancel");
   dialog.showModal();
   const first = Object.values(inputs)[0];
   if (first) { first.focus(); first.select(); }

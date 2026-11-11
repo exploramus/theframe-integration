@@ -94,7 +94,8 @@
       <h3 id="dialog-title"></h3>
       <div id="dialog-body"></div>
       <menu>
-        <button value="cancel" formnovalidate>Cancel</button>
+        <!-- type="button": Enter in a field must answer with OK, the form's only submit button -->
+        <button type="button" id="dialog-cancel">Cancel</button>
         <button id="dialog-ok" value="ok" class="primary">OK</button>
       </menu>
     </form>

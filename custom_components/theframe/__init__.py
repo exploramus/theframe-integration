@@ -15,7 +15,6 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .api import TheFrameApi, TheFrameApiError
 from .const import (
     CONF_BASE_URL,
-    CONF_IGNORE_KEYWORDS,
     CONF_RELOAD_HOMEKIT,
     DATA_FILES,
     DOMAIN,
@@ -73,7 +72,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
 
     register_views(hass)
-    await _send_hidden_keywords(api, entry)
+    await coordinator.send_editor_settings()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "api": api,
@@ -116,19 +115,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             ):
                 hass.services.async_remove(DOMAIN, svc)
     return unloaded
-
-
-async def _send_hidden_keywords(api: TheFrameApi, entry: ConfigEntry) -> None:
-    """The collections editor runs in the add-on; it hides the keywords ignored here as well.
-
-    Sent at every setup; changing the options reloads the entry, which sends them again.
-    """
-    ignored = list(entry.options.get(CONF_IGNORE_KEYWORDS, []) or [])
-    try:
-        await api.editor_settings(hidden_keywords=ignored)
-    except TheFrameApiError as err:
-        # an add-on before 1.6.4 has no settings; everything else keeps working
-        _LOGGER.debug("Could not send the ignored keywords to the add-on: %s", err)
 
 
 async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:

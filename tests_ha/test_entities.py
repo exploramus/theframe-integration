@@ -206,3 +206,27 @@ async def test_an_addon_without_settings_still_sets_up(hass, aioclient_mock):
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     assert hass.states.get("sensor.the_frame_current_image") is not None
+
+
+async def test_ignored_keywords_are_sent_again_when_the_addon_comes_back(hass, addon):
+    """an add-on restarted or updated after setup gets the ignored keywords on the next event stream connect"""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    connected = asyncio.Event()
+
+    async def events(self):
+        yield "status", STATUS                                         # the stream (re)connects
+        connected.set()
+        await asyncio.Event().wait()
+
+    with patch("custom_components.theframe.api.TheFrameApi.events", events):
+        entry = MockConfigEntry(domain="theframe", data={"base_url": BASE}, options={"ignore_keywords": ["TheFrame"]})
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        await asyncio.wait_for(connected.wait(), 5)
+        for _ in range(10):
+            await asyncio.sleep(0)
+        # once at setup, once when the event stream connected
+        assert calls(addon, "PUT", "/api/v1/editor/settings") == [{"hidden_keywords": ["TheFrame"]}] * 2
+        assert await hass.config_entries.async_unload(entry.entry_id)
