@@ -28,7 +28,7 @@
     "step": {
       "init": {
         "title": "The Frame Optionen",
-        "description": "Ignorierte Keywords: Komma-separierte Liste von Keywords, die in dieser Integration ausgeblendet werden. Nützlich für Marker-Tags wie \"TheFrame\" oder \"exportiert\", die du in deiner Fotosammlung als Hilfsmarker pflegst, die aber keinen eigenen Switch / Media-Browser-Ordner brauchen. Verborgene Keywords verschwinden auch aus den Datei-Metadaten.\n\nHomeKit: Apple Home zeigt neue, umbenannte oder gelöschte Sammlungen erst, nachdem die HomeKit-Bridge neu geladen wurde. Mit dieser Option lädt jede HomeKit-Bridge, die die Sammlungsauswahl zeigt, 30 Sekunden nach der letzten Änderung neu.",
+        "description": "Ignorierte Keywords: Komma-separierte Liste von Keywords, die in dieser Integration ausgeblendet werden. Nützlich für Marker-Tags wie \"TheFrame\" oder \"exportiert\", die du in deiner Fotosammlung als Hilfsmarker pflegst, die aber keinen eigenen Switch / Media-Browser-Ordner brauchen. Verborgene Keywords verschwinden auch aus den Datei-Metadaten und aus dem Sammlungs-Editor.\n\nHomeKit: Neue, umbenannte oder gelöschte Sammlungen erscheinen normalerweise von selbst in Apple Home. Falls nicht, diese Option einschalten: Jede HomeKit-Bridge, die die Sammlungsauswahl zeigt, lädt dann 30 Sekunden nach der letzten Änderung neu.",
         "data": {
           "ignore_keywords": "Ignorierte Keywords",
           "reload_homekit": "HomeKit-Bridge neu laden, wenn sich Sammlungen ändern"

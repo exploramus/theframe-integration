@@ -377,3 +377,42 @@ def test_new_collection_with_the_name_of_a_deleted_one(served, page):
     assert collections["Shades"]["files"] == ["sea_2.jpg"]
     assert (collections["Shades (restored)"]["kind"], collections["Shades (restored)"]["keywords"]) == ("keywords", ["Sea"])
     expect(page.locator(".toast.error")).to_have_count(0)
+
+
+def test_restore_a_collection_from_before_the_history(served, page, addon):
+    """collections converted from 1.5 have no history entry for their first revision"""
+    base, http = served
+    cid = http.put("/api/v1/collections/Shades", json={"keywords": ["Sea"]}).json()["id"]
+    addon.controller.history.entries.pop(cid)                        # as after the conversion from 1.5
+    open_editor(page, base)
+    page.locator("#collection-list button", has_text="Shades").click()
+    page.get_by_role("button", name="Delete").click()
+    page.locator("#dialog-ok").click()
+    expect(page.locator("#collection-header")).to_be_hidden()
+    expect(page.locator(".toast", has_text="was deleted by")).to_have_count(0)   # own delete: no notice
+
+    new_collection(page, "Shades")
+    expect(page.locator("#collection-list button", has_text="Shades")).to_have_count(1)
+    page.locator("#deleted summary").click()
+    page.locator("#deleted-list li", has_text="Shades").get_by_role("button", name="Restore").click()
+    expect(page.locator("#collection-name")).to_have_text("Shades (restored)")
+    expect(page.locator("#collection-list button")).to_have_count(2)
+    expect(page.locator(".toast.error")).to_have_count(0)
+    assert api_collections(http)["Shades (restored)"]["keywords"] == ["Sea"]
+
+
+def test_hidden_keywords_are_not_offered(served, page):
+    """the integration's ignored keywords (sent as hidden_keywords) stay out of the editor's keyword lists"""
+    base, http = served
+    http.put("/api/v1/collections/Old", json={"keywords": ["Sea", "Sky"]})
+    open_editor(page, base)
+    expect(page.locator("#search-keywords .chip", has_text="Sky")).to_have_count(1)
+    http.put("/api/v1/editor/settings", json={"hidden_keywords": ["Sky"]})          # arrives as an event
+    expect(page.locator("#search-keywords .chip", has_text="Sky")).to_have_count(0)
+    page.locator("#collection-list button", has_text="Old").click()
+    # a hidden keyword the collection still uses stays, so it can be removed
+    expect(page.locator("#keyword-editor-chips .chip", has_text="Sky")).to_have_attribute("aria-pressed", "true")
+    new_collection(page, "Fresh", kind="keywords")
+    expect(page.locator("#keyword-editor-chips .chip", has_text="Sky")).to_have_count(0)
+    page.reload()
+    expect(page.locator("#search-keywords .chip", has_text="Sky")).to_have_count(0)

@@ -183,6 +183,7 @@ The integration uses the versioned API under `/api/v1`. Its full description is 
 | `POST /api/v1/collections/{id}/undo` | Undo your own last change to the collection |
 | `POST /api/v1/collections/{id}/restore` | Return a collection to a revision (`{"revision": n}`), also a deleted one |
 | `GET /api/v1/collections/deleted` | Deleted collections that can still be restored |
+| `GET`, `PUT /api/v1/editor/settings` | Editor settings: `hidden_keywords`, keywords the editor does not offer (the integration sends its ignored keywords) |
 | `GET /api/v1/collections/export`, `POST /api/v1/collections/import` | All collections as JSON; import adds them, a taken name gets a number |
 | `POST /api/v1/slideshow/next`, `/previous`, `/show` | Step through the slideshow, or show `{"position": n}` |
 | `GET /api/v1/settings` | The TV's Art Mode settings (brightness, colour temperature, motion sensor) |

@@ -243,3 +243,46 @@ def test_interrupted_write_is_rolled_forward_from_the_history(addon, theframe, t
     restarted = TestClient(theframe.TheFrameController(options_file=str(write_options(tmp_path))).app)
     assert files_of(restarted, cid) == ["a.jpg", "b.jpg"]
     assert restarted.get("/api/v1/status").json()["collections"] == ["Trip"]
+
+
+def test_restore_a_deleted_collection_from_before_the_history(theframe, tmp_path):
+    """collections converted from version 1 have no history entry for revision 1; deleting one, creating a
+    collection with its name and restoring the deleted one must still work"""
+    images = tmp_path / "images"
+    images.mkdir()
+    (tmp_path / "state.json").write_text(json.dumps({
+        "slideshow": {"enabled": False, "interval_minutes": 5, "mode": "keywords", "keywords": [], "files": []},
+        "collections": {"Shades": {"mode": "keywords", "keywords": ["Sea"]}},
+    }))
+    client = TestClient(theframe.TheFrameController(options_file=str(write_options(tmp_path))).app)
+    shades = client.get("/api/v1/collections").json()["collections"][0]
+    assert change(client, change="delete", collection=shades["id"]).status_code == 200
+    deleted = client.get("/api/v1/collections/deleted").json()["collections"]
+    assert [(d["name"], d["revision"]) for d in deleted] == [("Shades", 2)]
+
+    new = create(client, ["a.jpg"], name="Shades")
+    assert [c["name"] for c in client.get("/api/v1/collections").json()["collections"]] == ["Shades"]
+
+    restored = client.post("/api/v1/collections/{}/restore".format(shades["id"]),
+                           json={"revision": 1, "id": uuid.uuid4().hex})
+    assert restored.status_code == 200, restored.json()
+    collections = {c["name"]: c for c in client.get("/api/v1/collections").json()["collections"]}
+    assert collections["Shades"]["id"] == new
+    assert (collections["Shades (restored)"]["id"], collections["Shades (restored)"]["keywords"]) == \
+        (shades["id"], ["Sea"])
+    assert client.get("/api/v1/collections/deleted").json()["collections"] == []
+
+
+def test_hidden_keywords_are_kept_and_announced(addon, tmp_path):
+    client = addon.client
+    assert client.get("/api/v1/editor/settings").json() == {"hidden_keywords": []}
+    queue = asyncio.Queue()
+    addon.controller.events.queues.add(queue)
+    answer = client.put("/api/v1/editor/settings", json={"hidden_keywords": [" TheFrame", "exportiert", "TheFrame", ""]})
+    assert answer.json() == {"hidden_keywords": ["TheFrame", "exportiert"]}
+    assert queue.get_nowait() == ("editor_settings", {"hidden_keywords": ["TheFrame", "exportiert"]})
+    assert json.loads((tmp_path / "state.json").read_text())["settings"] == {"hidden_keywords": ["TheFrame", "exportiert"]}
+    restarted = TestClient(type(addon.controller)(options_file=str(tmp_path / "options.json")).app)
+    assert restarted.get("/api/v1/editor/settings").json() == {"hidden_keywords": ["TheFrame", "exportiert"]}
+    assert client.put("/api/v1/editor/settings", json={}).json() == {"hidden_keywords": ["TheFrame", "exportiert"]}
+    assert queue.empty()                                                  # unchanged: no event
